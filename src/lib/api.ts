@@ -30,3 +30,6 @@ export function resolvePath(baseFile: string, rel: string): string {
   }
   return "/" + out.join("/");
 }
+
+export const loadSession = () => invoke<string | null>("load_session");
+export const saveSession = (json: string) => invoke<void>("save_session", { json });

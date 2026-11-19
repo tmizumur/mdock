@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// フォルダツリーの1要素
 #[derive(Serialize)]
@@ -63,6 +63,29 @@ fn write_text(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// アプリの状態（開いていたフォルダ・ファイルなど）の保存先。
+/// アプリを更新しても消えない場所（~/Library/Application Support/com.mdock.app/）に置く。
+fn session_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("session.json"))
+}
+
+#[tauri::command]
+fn load_session(app: AppHandle) -> Result<Option<String>, String> {
+    let path = session_path(&app)?;
+    Ok(fs::read_to_string(path).ok())
+}
+
+#[tauri::command]
+fn save_session(app: AppHandle, json: String) -> Result<(), String> {
+    let path = session_path(&app)?;
+    // 書き込み途中で終了しても壊れないよう、一時ファイルに書いてから置き換える
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 /// 開いているフォルダの監視。新しいフォルダを開くと前の監視は止まる。
 #[derive(Default)]
 struct WatchState(Mutex<Option<Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>);
@@ -89,8 +112,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // ウィンドウの位置・サイズ・最大化状態を保存して、次の起動時に戻す
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(WatchState::default())
-        .invoke_handler(tauri::generate_handler![read_tree, read_text, write_text, watch_folder])
+        .invoke_handler(tauri::generate_handler![read_tree, read_text, write_text, watch_folder, load_session, save_session])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
