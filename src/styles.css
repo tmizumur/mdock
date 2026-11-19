@@ -1,0 +1,140 @@
+:root {
+  --bg: #ffffff;
+  --bg-side: #f6f7f9;
+  --bg-code: #f4f5f7;
+  --fg: #1f2328;
+  --fg-muted: #656d76;
+  --border: #d8dee4;
+  --accent: #2f6feb;
+  --accent-soft: rgba(47, 111, 235, 0.1);
+  --hover: rgba(0, 0, 0, 0.05);
+  --danger: #cf222e;
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --bg-side: #1d2026;
+    --bg-code: #22262e;
+    --fg: #e6e8eb;
+    --fg-muted: #9198a1;
+    --border: #2f343c;
+    --accent: #4c8dff;
+    --accent-soft: rgba(76, 141, 255, 0.14);
+    --hover: rgba(255, 255, 255, 0.06);
+    --danger: #ff7b72;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+/* ツールバー */
+.toolbar {
+  display: flex; align-items: center; gap: 10px;
+  height: 42px; padding: 0 12px;
+  border-bottom: 1px solid var(--border); background: var(--bg-side);
+  user-select: none;
+}
+.root-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spacer { flex: 1; }
+.error { color: var(--danger); font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+button { font: inherit; color: inherit; cursor: pointer; }
+.btn {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); font-size: 12.5px;
+}
+.btn:hover:not(:disabled) { background: var(--hover); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.icon-btn { border: none; background: none; font-size: 16px; line-height: 1; padding: 2px 6px; color: var(--fg-muted); border-radius: 4px; }
+.icon-btn:hover { background: var(--hover); color: var(--fg); }
+
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.segmented button { border: none; background: var(--bg); padding: 3px 10px; font-size: 12.5px; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* レイアウト */
+.main { flex: 1; min-height: 0; }
+.sep { width: 1px; background: var(--border); position: relative; }
+.sep::after { content: ""; position: absolute; inset: 0 -3px; }
+.sep:hover, .sep[data-separator="active"] { background: var(--accent); }
+
+/* サイドバー */
+.sidebar { height: 100%; display: flex; flex-direction: column; background: var(--bg-side); user-select: none; }
+.sidebar-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 10px; font-size: 11.5px; font-weight: 600; color: var(--fg-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.sidebar-head label { text-transform: none; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+.tree { overflow: auto; flex: 1; padding-bottom: 16px; }
+.tree-row {
+  padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; font-size: 13px; border-radius: 4px; margin: 0 4px;
+}
+.tree-row:hover { background: var(--hover); }
+.tree-row.active { background: var(--accent-soft); color: var(--accent); }
+.tree-row.dim { color: var(--fg-muted); }
+.tree-row .chev { display: inline-block; width: 14px; color: var(--fg-muted); }
+.tree-row.file { padding-left: 22px; }
+.tree-empty { padding: 16px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; font-size: 13px; }
+
+/* ペイン */
+.pane { height: 100%; display: flex; flex-direction: column; border-top: 2px solid transparent; }
+.pane.active { border-top-color: var(--accent); }
+.pane-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 36px; padding: 0 10px; border-bottom: 1px solid var(--border);
+  font-size: 12.5px; user-select: none;
+}
+.pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.pane.active .pane-title { color: var(--fg); }
+.dirty { color: var(--accent); margin-left: 6px; }
+.pane-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.pane-body { flex: 1; min-height: 0; overflow: auto; }
+.placeholder {
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--fg-muted);
+}
+
+/* エディタ */
+.editor { height: 100%; }
+.editor .cm-editor { height: 100%; font-size: 13.5px; }
+.editor .cm-scroller { font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.6; }
+.editor .cm-focused { outline: none; }
+
+/* Markdown 表示 */
+.markdown-body { max-width: 860px; margin: 0 auto; padding: 24px 32px 80px; line-height: 1.75; font-size: 15px; word-wrap: break-word; }
+.markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body h1 { font-size: 1.9em; margin: 0.6em 0 0.5em; }
+.markdown-body h2 { font-size: 1.45em; margin: 1.4em 0 0.6em; }
+.markdown-body h3 { font-size: 1.2em; margin: 1.3em 0 0.5em; }
+.markdown-body a { color: var(--accent); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; background: var(--bg-code); padding: 0.15em 0.35em; border-radius: 4px; }
+.markdown-body pre { background: var(--bg-code) !important; padding: 14px 16px; border-radius: 8px; overflow: auto; line-height: 1.5; }
+.markdown-body pre code { background: none; padding: 0; font-size: 13px; }
+.markdown-body pre.mermaid { background: transparent !important; text-align: center; }
+.markdown-body blockquote { margin: 0; padding: 0 1em; color: var(--fg-muted); border-left: 4px solid var(--border); }
+.markdown-body table { border-collapse: collapse; display: block; overflow: auto; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 12px; }
+.markdown-body th { background: var(--bg-side); }
+.markdown-body img { max-width: 100%; }
+.markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+.markdown-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+
+/* Shiki のライト/ダーク切り替え */
+.shiki, .shiki span { color: var(--shiki-light); }
+@media (prefers-color-scheme: dark) {
+  .shiki, .shiki span { color: var(--shiki-dark); }
+}
