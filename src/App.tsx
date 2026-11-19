@@ -1,40 +1,96 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { Group, Layout, Panel, Separator } from "react-resizable-panels";
+import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import FileTree from "./components/FileTree";
 import Pane, { PaneState, emptyPane } from "./components/Pane";
-import { Entry, norm, readText, readTree, watchFolder, writeText } from "./lib/api";
+import { Entry, loadSession, norm, readText, readTree, saveSession, watchFolder, writeText } from "./lib/api";
 
-const STORE_KEY = "mdock.session";
+type SavedPane = {
+  path: string | null;
+  mode: "view" | "edit";
+  scroll: number;
+  /** 未保存の編集内容（あれば） */
+  draft?: string;
+  /** draft を書き始めたときのディスク上の内容。ファイルが外で変わっていたら draft は捨てる */
+  draftBase?: string;
+};
 
-type Session = { root: string | null; paths: (string | null)[]; split: boolean; mdOnly: boolean };
+type Session = {
+  version: 2;
+  root: string | null;
+  panes: SavedPane[];
+  activeIdx: number;
+  split: boolean;
+  mdOnly: boolean;
+  layouts: { split?: Layout; single?: Layout };
+};
 
-function loadSession(): Session {
+const defaultSession = (): Session => ({
+  version: 2,
+  root: null,
+  panes: [
+    { path: null, mode: "view", scroll: 0 },
+    { path: null, mode: "view", scroll: 0 },
+  ],
+  activeIdx: 0,
+  split: true,
+  mdOnly: true,
+  layouts: {},
+});
+
+/** 保存しておいた状態を読む。壊れていたら初期状態から始める。 */
+async function restoreSession(): Promise<Session> {
   try {
-    const s = JSON.parse(localStorage.getItem(STORE_KEY) ?? "");
-    if (s && Array.isArray(s.paths)) return s;
-  } catch {
-    /* 初回起動など */
+    const raw = await loadSession();
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s?.version === 2 && Array.isArray(s.panes)) return { ...defaultSession(), ...s };
+    }
+    // 初期版（localStorage に保存していた頃）からの引き継ぎ
+    const old = JSON.parse(localStorage.getItem("mdock.session") ?? "null");
+    if (old && Array.isArray(old.paths)) {
+      return {
+        ...defaultSession(),
+        root: old.root,
+        split: old.split,
+        mdOnly: old.mdOnly,
+        panes: old.paths.map((path: string | null) => ({ path, mode: "view", scroll: 0 })),
+      };
+    }
+  } catch (e) {
+    console.warn("session", e);
   }
-  return { root: null, paths: [null, null], split: true, mdOnly: true };
+  return defaultSession();
 }
 
 export default function App() {
-  const initial = useRef(loadSession()).current;
-  const [root, setRoot] = useState<string | null>(initial.root);
+  const [ready, setReady] = useState(false);
+  const [root, setRoot] = useState<string | null>(null);
   const [tree, setTree] = useState<Entry[]>([]);
   const [panes, setPanes] = useState<PaneState[]>([emptyPane(), emptyPane()]);
   const [activeIdx, setActiveIdx] = useState(0);
-  const [split, setSplit] = useState(initial.split);
-  const [mdOnly, setMdOnly] = useState(initial.mdOnly);
+  const [split, setSplit] = useState(true);
+  const [mdOnly, setMdOnly] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [restoreScroll, setRestoreScroll] = useState<({ path: string; top: number } | undefined)[]>([]);
+  const layouts = useRef<Session["layouts"]>({});
+  const scrolls = useRef<number[]>([0, 0]);
 
   // イベントハンドラから最新の状態を読むための参照
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  const rootRef = useRef(root);
+  rootRef.current = root;
+  const activeRef = useRef(activeIdx);
+  activeRef.current = activeIdx;
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  const mdOnlyRef = useRef(mdOnly);
+  mdOnlyRef.current = mdOnly;
 
   const updatePane = (i: number, patch: Partial<PaneState>) =>
     setPanes((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
@@ -75,21 +131,91 @@ export default function App() {
     }
   };
 
-  // 起動時: 前回のフォルダとファイルを復元
+  // 起動時: 前回のフォルダ・ファイル・表示モード・スクロール位置・未保存の編集を復元
   useEffect(() => {
-    if (initial.root) {
-      openFolder(initial.root).then(() =>
-        initial.paths.forEach((p, i) => p && openFile(p, i)),
+    (async () => {
+      const s = await restoreSession();
+      setSplit(s.split);
+      setMdOnly(s.mdOnly);
+      setActiveIdx(s.split ? s.activeIdx : 0);
+      layouts.current = s.layouts ?? {};
+      scrolls.current = s.panes.map((p) => p.scroll ?? 0);
+      setRestoreScroll(s.panes.map((p) => (p.path ? { path: p.path, top: p.scroll ?? 0 } : undefined)));
+      if (s.root) {
+        try {
+          setTree(await readTree(s.root));
+          setRoot(s.root);
+          watchFolder(s.root).catch(() => {});
+        } catch {
+          /* フォルダが消えていた場合は何も開かない */
+        }
+      }
+      const restored = await Promise.all(
+        [0, 1].map(async (i): Promise<PaneState> => {
+          const p = s.panes[i];
+          if (!p?.path) return emptyPane();
+          try {
+            const text = await readText(p.path);
+            const draft = p.draft !== undefined && p.draftBase === text ? p.draft : text;
+            return { path: p.path, content: draft, saved: text, mode: p.mode ?? "view" };
+          } catch {
+            return emptyPane();
+          }
+        }),
       );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      setPanes(restored);
+      setReady(true);
+    })();
   }, []);
 
-  // 状態を保存
+  // 状態をファイルに保存（変更から少し待ってまとめて書く）
+  const saveTimer = useRef<number | undefined>(undefined);
+  const persist = useCallback(() => {
+    const ps = panesRef.current;
+    const s: Session = {
+      version: 2,
+      root: rootRef.current,
+      panes: ps.map((p, i) => ({
+        path: p.path,
+        mode: p.mode,
+        scroll: scrolls.current[i] ?? 0,
+        ...(p.content !== p.saved ? { draft: p.content, draftBase: p.saved } : {}),
+      })),
+      activeIdx: activeRef.current,
+      split: splitRef.current,
+      mdOnly: mdOnlyRef.current,
+      layouts: layouts.current,
+    };
+    return saveSession(JSON.stringify(s)).catch((e) => console.warn("save session", e));
+  }, []);
+  const schedulePersist = useCallback(() => {
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(persist, 400);
+  }, [persist]);
+
   useEffect(() => {
-    const s: Session = { root, paths: panes.map((p) => p.path), split, mdOnly };
-    localStorage.setItem(STORE_KEY, JSON.stringify(s));
-  }, [root, panes, split, mdOnly]);
+    if (ready) schedulePersist();
+  }, [ready, root, panes, activeIdx, split, mdOnly, schedulePersist]);
+
+  // 終了するとき・ウィンドウを動かしたときにも保存する
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let t: number | undefined;
+    const saveWin = () => {
+      window.clearTimeout(t);
+      t = window.setTimeout(() => saveWindowState(StateFlags.ALL).catch(() => {}), 500);
+    };
+    const uns = [
+      win.onMoved(saveWin),
+      win.onResized(saveWin),
+      win.onCloseRequested(async () => {
+        window.clearTimeout(saveTimer.current);
+        await persist();
+        await saveWindowState(StateFlags.ALL).catch(() => {});
+      }),
+    ];
+    return () => uns.forEach((u) => u.then((f) => f()));
+  }, [persist]);
 
   // ウィンドウタイトル
   useEffect(() => {
@@ -217,6 +343,11 @@ export default function App() {
       onSave={() => save(i)}
       onClose={() => closePane(i)}
       onOpenLink={(p) => openFile(p, i)}
+      restoreScroll={restoreScroll[i]}
+      onScroll={(top) => {
+        scrolls.current[i] = top;
+        schedulePersist();
+      }}
     />
   );
 
@@ -241,7 +372,17 @@ export default function App() {
         </div>
       </header>
 
-      <Group orientation="horizontal" className="main">
+      {ready && (
+      <Group
+        key={split ? "split" : "single"}
+        orientation="horizontal"
+        className="main"
+        defaultLayout={split ? layouts.current.split : layouts.current.single}
+        onLayoutChanged={(layout) => {
+          layouts.current = { ...layouts.current, [split ? "split" : "single"]: layout };
+          schedulePersist();
+        }}
+      >
         <Panel id="sidebar" defaultSize="22" minSize={160} collapsible>
           <aside className="sidebar">
             <div className="sidebar-head">
@@ -265,6 +406,7 @@ export default function App() {
         {split && <Separator className="sep" />}
         {split && <Panel id="pane-1" minSize={240}>{renderPane(1)}</Panel>}
       </Group>
+      )}
     </div>
   );
 }
