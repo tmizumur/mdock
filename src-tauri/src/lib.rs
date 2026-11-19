@@ -114,6 +114,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // ウィンドウの位置・サイズ・最大化状態を保存して、次の起動時に戻す
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // アプリ内アップデート（GitHub Releases から新しい版を取得）と、更新後の再起動
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(WatchState::default())
         .invoke_handler(tauri::generate_handler![read_tree, read_text, write_text, watch_folder, load_session, save_session])
         .run(tauri::generate_context!())
