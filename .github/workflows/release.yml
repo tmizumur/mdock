@@ -1,0 +1,57 @@
+# main にマージされるたびに Mac 版をビルドして GitHub Releases に公開する。
+# アプリ内の「更新して再起動」ボタンは、ここで公開された latest.json を見て新しい版を探す。
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      # バージョンを 0.1.<実行番号> に上げ、更新用ファイル（署名付き）を作る設定を有効にする
+      - name: Set version
+        run: |
+          VERSION="0.1.${{ github.run_number }}"
+          jq --arg v "$VERSION" '.version = $v | .bundle.createUpdaterArtifacts = true' \
+            src-tauri/tauri.conf.json > /tmp/conf.json && mv /tmp/conf.json src-tauri/tauri.conf.json
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Mdock v__VERSION__
+          releaseBody: ${{ github.event.head_commit.message }}
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin --bundles app,dmg

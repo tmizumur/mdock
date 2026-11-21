@@ -24,6 +24,21 @@ AI が書いた Markdown を、VS Code より速く・快適に読むための�
 | 表示 / 編集 切り替え | ⌘E |
 | 保存 | ⌘S |
 
+## アップデート
+
+main にマージすると GitHub Actions が自動でビルドし、[Releases](https://github.com/tmizumur/mdock/releases) に新しい版（0.1.<番号>）を公開します。
+Mdock は起動時と1時間ごとに新しい版を確認し、あればツールバーに「vX に更新して再起動」ボタンが出ます。押すと更新して再起動し、開いていたフォルダやウィンドウ位置はそのまま戻ります。
+
+### 最初に1回だけ必要な準備
+
+更新ファイルの署名に使う鍵を GitHub の Secrets に登録します。
+
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY --repo tmizumur/mdock < ~/.tauri/mdock.key
+```
+
+鍵（`~/.tauri/mdock.key`）は他人に渡さないでください。なくすと、それ以降の更新を配れなくなります。
+
 ## 開発
 
 必要なもの: Node.js 20 以上、Rust（`rustup`）、Xcode Command Line Tools

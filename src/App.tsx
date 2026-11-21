@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import FileTree from "./components/FileTree";
+import UpdateButton from "./components/UpdateButton";
 import Pane, { PaneState, emptyPane } from "./components/Pane";
 import { Entry, loadSession, norm, readText, readTree, saveSession, watchFolder, writeText } from "./lib/api";
 
@@ -362,6 +363,13 @@ export default function App() {
         </span>
         <span className="spacer" />
         {error && <span className="error">{error}</span>}
+        <UpdateButton
+          beforeRestart={async () => {
+            window.clearTimeout(saveTimer.current);
+            await persist();
+            await saveWindowState(StateFlags.ALL).catch(() => {});
+          }}
+        />
         <div className="segmented" role="group" aria-label="画面分割">
           <button className={!split ? "on" : ""} onClick={() => { setSplit(false); setActiveIdx(0); }} title="1画面 (⌘\)">
             1画面
