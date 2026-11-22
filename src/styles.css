@@ -79,14 +79,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
 .tree { overflow: auto; flex: 1; padding-bottom: 16px; }
 .tree-row {
-  padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; white-space: nowrap; overflow: hidden;
   cursor: pointer; font-size: 13px; border-radius: 4px; margin: 0 4px;
 }
 .tree-row:hover { background: var(--hover); }
 .tree-row.active { background: var(--accent-soft); color: var(--accent); }
 .tree-row.dim { color: var(--fg-muted); }
-.tree-row .chev { display: inline-block; width: 14px; color: var(--fg-muted); }
-.tree-row.file { padding-left: 22px; }
+.tree-row .chev { display: inline-block; width: 10px; flex-shrink: 0; color: var(--fg-muted); font-size: 10px; }
+.tree-icon { flex-shrink: 0; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; }
+.tree-row.dim .tree-icon { opacity: 0.75; }
 .tree-empty { padding: 16px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; font-size: 13px; }
 
 /* ペイン */

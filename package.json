@@ -19,6 +19,7 @@
     "@tauri-apps/plugin-updater": "^2.14.1",
     "@tauri-apps/plugin-window-state": "^2.5.0",
     "codemirror": "^6.0.2",
+    "lucide-react": "^1.77.0",
     "markdown-it": "^15.0.3",
     "markdown-it-anchor": "^10.1.0",
     "mermaid": "^12.3.0",
