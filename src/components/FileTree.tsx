@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import { Entry, isMarkdown } from "../lib/api";
+import { TreeIcon, fileIcon, folderIcon } from "../lib/fileIcons";
 
 type Props = {
   entries: Entry[];
@@ -49,7 +50,8 @@ const Node = memo(function Node({
       <li role="treeitem" aria-expanded={expanded}>
         <div className="tree-row dir" style={pad} onClick={() => setExpanded(!expanded)}>
           <span className="chev">{expanded ? "▾" : "▸"}</span>
-          {entry.name}
+          <TreeIcon def={folderIcon(entry.name, expanded)} />
+          <span className="tree-name">{entry.name}</span>
         </div>
         {expanded && (
           <ul role="group">
@@ -67,11 +69,12 @@ const Node = memo(function Node({
     <li role="treeitem">
       <div
         className={`tree-row file ${active ? "active" : ""} ${isMarkdown(entry.name) ? "" : "dim"}`}
-        style={pad}
+        style={{ paddingLeft: pad.paddingLeft + 16 }}
         title="クリックで開く / ⌘+クリックでもう片方のペインに開く"
         onClick={(ev) => onOpen(entry.path, ev.metaKey || ev.ctrlKey)}
       >
-        {entry.name}
+        <TreeIcon def={fileIcon(entry.name)} />
+        <span className="tree-name">{entry.name}</span>
       </div>
     </li>
   );
