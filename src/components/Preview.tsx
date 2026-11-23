@@ -10,7 +10,7 @@ import {
   renderMarkdown,
   renderMermaidBlock,
 } from "../lib/markdown";
-import { isMarkdown, resolvePath, safeDecode } from "../lib/api";
+import { copyText, isMarkdown, resolvePath, safeDecode } from "../lib/api";
 import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find";
 import { useSettings } from "../lib/settings";
 
@@ -59,21 +59,6 @@ function findAnchor(root: HTMLElement, raw: string): HTMLElement | null {
     if (el) return el;
   }
   return null;
-}
-
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.parentNode?.removeChild(ta);
-  }
 }
 
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */

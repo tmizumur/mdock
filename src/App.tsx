@@ -12,7 +12,8 @@ import Pane, { PaneCommand } from "./components/Pane";
 import ViewMenu from "./components/ViewMenu";
 import { ContextMenu, type MenuItem, useUnsavedDialog } from "./components/Dialogs";
 import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
-import { Entry, loadSession, norm, readText, readTree, saveSession, watchFolder, writeText } from "./lib/api";
+import { Entry, cancelQuit, dirname, loadSession, norm, openNewWindow, printWindow, readText, readTree, saveSession, takePendingOpens, watchFolder, writeText } from "./lib/api";
+import { renderAllPending } from "./lib/markdown";
 import {
   type DiffTab,
   type DocTab,
@@ -84,6 +85,8 @@ export default function App() {
   layoutRef.current = layout;
   const mdOnlyRef = useRef(mdOnly);
   mdOnlyRef.current = mdOnly;
+  const hiddenRef = useRef(settings.showHidden);
+  hiddenRef.current = settings.showHidden;
 
   const paneCount = PANE_COUNT[layout];
 
@@ -143,7 +146,7 @@ export default function App() {
   /** フォルダを開く（ツリー読み込み + 監視開始） */
   const openFolder = useCallback(async (dir: string) => {
     try {
-      const entries = await readTree(dir);
+      const entries = await readTree(dir, hiddenRef.current);
       setRoot(dir);
       setTree(entries);
       await watchFolder(dir);
@@ -325,7 +328,7 @@ export default function App() {
       layouts.current = s.layouts ?? {};
       if (s.root) {
         try {
-          setTree(await readTree(s.root));
+          setTree(await readTree(s.root, hiddenRef.current));
           setRoot(s.root);
           watchFolder(s.root).catch(() => {});
         } catch {
@@ -415,9 +418,16 @@ export default function App() {
       dirty.length === 1 ? `「${tabTitle(dirty[0])}」の変更を保存しますか？` : `${dirty.length} 個のファイルに未保存の変更があります。保存しますか？`,
       "保存しないと、変更は失われます。",
     );
-    if (c === "cancel") return;
+    if (c === "cancel") {
+      cancelQuit().catch(() => {}); // ⌘Q の終了も取りやめる
+      return;
+    }
     if (c === "save") {
-      for (const t of dirty) if (!(await saveTab(t.id))) return;
+      for (const t of dirty)
+        if (!(await saveTab(t.id))) {
+          cancelQuit().catch(() => {});
+          return;
+        }
     } else {
       // 保存しない: 編集内容を捨ててから状態を書き出す（次に開いたとき復元しない）
       panesRef.current = panesRef.current.map((p) => ({
@@ -489,7 +499,7 @@ export default function App() {
         );
       }
       window.clearTimeout(treeTimer);
-      treeTimer = window.setTimeout(() => readTree(root).then(setTree).catch(() => {}), 300);
+      treeTimer = window.setTimeout(() => readTree(root, hiddenRef.current).then(setTree).catch(() => {}), 300);
     });
     return () => {
       un.then((f) => f());
@@ -519,6 +529,79 @@ export default function App() {
     };
   }, [openFolder, openFile, confirmDirty]);
 
+  const refreshTree = useCallback(() => {
+    const r = rootRef.current;
+    if (r) readTree(r, hiddenRef.current).then(setTree).catch(() => {});
+  }, []);
+
+  // 隠しファイルの表示を切り替えたらツリーを読み直す
+  useEffect(() => {
+    if (ready) refreshTree();
+  }, [settings.showHidden, ready, refreshTree]);
+
+  /** ツリーで名前を変えたら、そのファイル（フォルダならその中）を開いているタブのパスも直す */
+  const onRenamed = (from: string, to: string) => {
+    const move = (p: string) => (p === from ? to : p.startsWith(from + "/") ? to + p.slice(from.length) : p);
+    setPanes((ps) =>
+      ps.map((p) => ({
+        ...p,
+        tabs: p.tabs.map((t): Tab => (t.kind === "doc" ? { ...t, path: move(t.path) } : { ...t, left: move(t.left), right: move(t.right) })),
+      })),
+    );
+  };
+
+  /**
+   * 印刷 / PDF に書き出し: そのペインのプレビューだけを、ライト配色で印刷する。
+   * 編集中なら表示モードにし、まだ描いていないコード・図・画像を先に描いてから印刷ダイアログを出す。
+   */
+  const printPane = async (i: number) => {
+    const t = activeTab(panesRef.current[i]);
+    if (t?.kind !== "doc") return;
+    setActiveIdx(i);
+    if (t.mode === "edit") updateActiveTab(i, (x) => (x.kind === "doc" ? { ...x, mode: "view" } : x));
+    await new Promise((r) => setTimeout(r, 150));
+    const body = document.querySelector<HTMLElement>(`.pane[data-pane="${i}"] .markdown-body`);
+    if (body) await renderAllPending(body);
+    try {
+      await printWindow();
+    } catch {
+      window.print();
+    }
+  };
+
+  /** Finder から開かれたファイル・フォルダ（関連付け・このアプリで開く）。フォルダ未選択なら親フォルダをルートにする */
+  const openPaths = async () => {
+    const paths = await takePendingOpens().catch(() => [] as string[]);
+    for (const p of paths) {
+      let isDir = false;
+      try {
+        await readTree(p);
+        isDir = true;
+      } catch {
+        /* ファイル */
+      }
+      if (isDir) {
+        if (!(await confirmDirty(panesRef.current.flatMap((q) => q.tabs)))) continue;
+        setPanes([emptyPane(), emptyPane(), emptyPane()]);
+        scrolls.current.clear();
+        await openFolder(p);
+      } else {
+        if (!rootRef.current) await openFolder(dirname(p));
+        await openFile(p, activeRef.current, { newTab: true });
+      }
+    }
+  };
+  const openPathsRef = useRef(openPaths);
+  openPathsRef.current = openPaths;
+  useEffect(() => {
+    if (!ready) return;
+    openPathsRef.current();
+    const un = getCurrentWindow().listen("open-paths", () => openPathsRef.current());
+    return () => {
+      un.then((f) => f());
+    };
+  }, [ready]);
+
   const toggleMode = (i: number) =>
     updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, mode: t.mode === "view" ? "edit" : "view" } : t));
 
@@ -538,6 +621,7 @@ export default function App() {
       if (t) saveTab(t.id);
     },
     "close-tab": closeActiveTab,
+    print: () => printPane(activeRef.current),
   };
   useEffect(() => {
     const un = getCurrentWindow().listen<string>("menu", (ev) => actions.current[ev.payload]?.());
@@ -574,6 +658,9 @@ export default function App() {
       } else if (k === "s") {
         e.preventDefault();
         actions.current.save();
+      } else if (k === "n" && !e.shiftKey) {
+        e.preventDefault();
+        openNewWindow().catch((err) => setError(String(err)));
       } else if (k === "o") {
         e.preventDefault();
         pickFolder();
@@ -634,6 +721,8 @@ export default function App() {
         if (t) saveTab(t.id);
       }}
       onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab })}
+      onPrint={() => printPane(i)}
+      printTarget={activeIdx === i}
     />
   );
 
@@ -686,7 +775,17 @@ export default function App() {
                 </label>
               </div>
               {root ? (
-                <FileTree entries={tree} mdOnly={mdOnly} openPaths={visiblePaths} onOpen={onTreeOpen} />
+                <FileTree
+                  key={root}
+                  root={root}
+                  entries={tree}
+                  mdOnly={mdOnly}
+                  openPaths={visiblePaths}
+                  onOpen={onTreeOpen}
+                  onChanged={refreshTree}
+                  onRenamed={onRenamed}
+                  onError={setError}
+                />
               ) : (
                 <div className="tree-empty">
                   <button className="btn" onClick={pickFolder}>フォルダを開く</button>
