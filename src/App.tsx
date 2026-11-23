@@ -7,7 +7,9 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import FileTree from "./components/FileTree";
 import UpdateButton from "./components/UpdateButton";
-import Pane, { PaneState, emptyPane } from "./components/Pane";
+import Pane, { PaneCommand, PaneState, emptyPane } from "./components/Pane";
+import ViewMenu from "./components/ViewMenu";
+import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
 import { Entry, loadSession, norm, readText, readTree, saveSession, watchFolder, writeText } from "./lib/api";
 
 type SavedPane = {
@@ -77,6 +79,8 @@ export default function App() {
   const [split, setSplit] = useState(true);
   const [mdOnly, setMdOnly] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [commands, setCommands] = useState<(PaneCommand | undefined)[]>([]);
+  const { settings, update: updateSettings } = useSettings();
   const [restoreScroll, setRestoreScroll] = useState<({ path: string; top: number } | undefined)[]>([]);
   const layouts = useRef<Session["layouts"]>({});
   const scrolls = useRef<number[]>([0, 0]);
@@ -97,11 +101,22 @@ export default function App() {
     setPanes((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
 
   /** ファイルを指定ペインに開く */
-  const openFile = useCallback(async (path: string, idx: number) => {
+  const openFile = useCallback(async (path: string, idx: number, anchor?: string) => {
     try {
-      const text = await readText(path);
+      const cur = panesRef.current[idx];
+      // 同じファイルで未保存の編集があるときは読み直さない
+      const text = cur?.path === path && cur.content !== cur.saved ? null : await readText(path);
       setPanes((ps) =>
-        ps.map((p, j) => (j === idx ? { path, content: text, saved: text, mode: p.path === path ? p.mode : "view" } : p)),
+        ps.map((p, j) =>
+          j === idx
+            ? {
+                ...(text === null ? p : { content: text, saved: text }),
+                path,
+                mode: p.path === path ? p.mode : "view",
+                anchor: anchor ? { id: anchor, nonce: Date.now() } : undefined,
+              }
+            : p,
+        ),
       );
       setActiveIdx(idx);
       if (idx === 1) setSplit(true);
@@ -301,7 +316,27 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
-      if (k === "s") {
+      if (k === "f" && !e.shiftKey) {
+        // CodeMirror が自分で処理した場合（エディタにフォーカスがある）は何もしない
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        const i = activeIdx;
+        setCommands((cs) => {
+          const next = [...cs];
+          next[i] = { type: "find", n: (cs[i]?.n ?? 0) + 1 };
+          return next;
+        });
+      } else if (k === "=" || k === "+" || k === ";") {
+        // ⌘+（JIS キーボードでは ⌘; の位置）で文字を大きく
+        e.preventDefault();
+        updateSettings((s) => ({ fontSize: s.fontSize + 1 }));
+      } else if (k === "-") {
+        e.preventDefault();
+        updateSettings((s) => ({ fontSize: s.fontSize - 1 }));
+      } else if (k === "0") {
+        e.preventDefault();
+        updateSettings({ fontSize: DEFAULT_SETTINGS.fontSize });
+      } else if (k === "s") {
         e.preventDefault();
         save(activeIdx);
       } else if (k === "o") {
@@ -335,7 +370,9 @@ export default function App() {
 
   const renderPane = (i: number) => (
     <Pane
+      id={`pane-${i}`}
       pane={panes[i]}
+      command={commands[i]}
       active={split && activeIdx === i}
       rootDir={root}
       onFocus={() => setActiveIdx(i)}
@@ -343,7 +380,7 @@ export default function App() {
       onToggleMode={() => toggleMode(i)}
       onSave={() => save(i)}
       onClose={() => closePane(i)}
-      onOpenLink={(p) => openFile(p, i)}
+      onOpenLink={(p, anchor) => openFile(p, i, anchor)}
       restoreScroll={restoreScroll[i]}
       onScroll={(top) => {
         scrolls.current[i] = top;
@@ -353,7 +390,7 @@ export default function App() {
   );
 
   return (
-    <div className="app">
+    <div className="app" style={{ "--doc-font-size": `${settings.fontSize}px` } as React.CSSProperties}>
       <header className="toolbar">
         <button className="btn" onClick={pickFolder} title="フォルダを開く (⌘O)">
           フォルダを開く
@@ -370,6 +407,7 @@ export default function App() {
             await saveWindowState(StateFlags.ALL).catch(() => {});
           }}
         />
+        <ViewMenu />
         <div className="segmented" role="group" aria-label="画面分割">
           <button className={!split ? "on" : ""} onClick={() => { setSplit(false); setActiveIdx(0); }} title="1画面 (⌘\)">
             1画面

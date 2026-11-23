@@ -9,6 +9,9 @@
   --accent-soft: rgba(47, 111, 235, 0.1);
   --hover: rgba(0, 0, 0, 0.05);
   --danger: #cf222e;
+  --find: rgba(255, 196, 0, 0.45);
+  --find-current: rgba(255, 140, 0, 0.85);
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
   color-scheme: light dark;
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
   font-size: 14px;
@@ -28,6 +31,9 @@
     --accent-soft: rgba(76, 141, 255, 0.14);
     --hover: rgba(255, 255, 255, 0.06);
     --danger: #ff7b72;
+    --find: rgba(255, 200, 0, 0.3);
+    --find-current: rgba(255, 140, 0, 0.75);
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -100,11 +106,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 36px; padding: 0 10px; border-bottom: 1px solid var(--border);
   font-size: 12.5px; user-select: none;
 }
-.pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); min-width: 0; display: flex; align-items: center; }
+.pane-file { overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.crumbs { display: inline-flex; min-width: 0; overflow: hidden; margin-left: 10px; color: var(--fg-muted); flex-shrink: 2; }
+.crumb { cursor: pointer; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.crumb:hover { color: var(--accent); }
+.crumb::before { content: "›"; margin: 0 6px; color: var(--border); }
 .pane.active .pane-title { color: var(--fg); }
 .dirty { color: var(--accent); margin-left: 6px; }
 .pane-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.pane-body { flex: 1; min-height: 0; overflow: auto; }
+.pane-main { flex: 1; min-height: 0; display: flex; position: relative; }
+.pane-body { flex: 1; min-width: 0; overflow: auto; }
 .placeholder {
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; color: var(--fg-muted);
@@ -112,12 +124,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* エディタ */
 .editor { height: 100%; }
-.editor .cm-editor { height: 100%; font-size: 13.5px; }
+.editor .cm-editor { height: 100%; font-size: calc(var(--doc-font-size, 15px) * 0.9); }
 .editor .cm-scroller { font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.6; }
 .editor .cm-focused { outline: none; }
 
 /* Markdown 表示 */
-.markdown-body { max-width: 860px; margin: 0 auto; padding: 24px 32px 80px; line-height: 1.75; font-size: 15px; word-wrap: break-word; }
+.markdown-body { max-width: 860px; margin: 0 auto; padding: 24px 32px 80px; line-height: 1.75; font-size: var(--doc-font-size, 15px); word-wrap: break-word; }
+.markdown-body.width-wide { max-width: 1200px; }
+.markdown-body.width-full { max-width: none; }
 .markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
 .markdown-body h1 { font-size: 1.9em; margin: 0.6em 0 0.5em; }
 .markdown-body h2 { font-size: 1.45em; margin: 1.4em 0 0.6em; }
@@ -126,8 +140,24 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .markdown-body a:hover { text-decoration: underline; }
 .markdown-body code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; background: var(--bg-code); padding: 0.15em 0.35em; border-radius: 4px; }
 .markdown-body pre { background: var(--bg-code) !important; padding: 14px 16px; border-radius: 8px; overflow: auto; line-height: 1.5; }
-.markdown-body pre code { background: none; padding: 0; font-size: 13px; }
+.markdown-body pre code { background: none; padding: 0; font-size: 0.87em; }
+.markdown-body.wrap-code pre, .markdown-body.wrap-code pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-body pre.mermaid { background: transparent !important; text-align: center; }
+.mermaid-block { text-align: center; margin: 1em 0; overflow: auto; }
+.mermaid-block.mermaid-error pre.mermaid { text-align: left; color: var(--fg-muted); }
+.markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+
+/* コードブロックのコピーボタン */
+.code-block { position: relative; }
+.copy-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 1;
+  padding: 2px 8px; font-size: 11.5px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg-muted);
+  opacity: 0; transition: opacity 0.12s;
+}
+.code-block:hover .copy-btn, .copy-btn:focus-visible, .copy-btn.done { opacity: 1; }
+.copy-btn:hover { color: var(--fg); }
+.copy-btn.done { color: var(--accent); border-color: var(--accent); }
 .markdown-body blockquote { margin: 0; padding: 0 1em; color: var(--fg-muted); border-left: 4px solid var(--border); }
 .markdown-body table { border-collapse: collapse; display: block; overflow: auto; }
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 12px; }
@@ -145,3 +175,55 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* 更新ボタン */
 .update-btn { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .update-btn:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+
+/* ファイル内検索 */
+::highlight(mdock-find) { background-color: var(--find); }
+::highlight(mdock-find-current) { background-color: var(--find-current); color: #000; }
+.find-bar {
+  position: absolute; top: 8px; right: 24px; z-index: 5;
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px 4px 4px 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); box-shadow: var(--shadow);
+}
+.find-bar input {
+  width: 200px; border: none; outline: none; background: none; color: var(--fg); font: inherit; font-size: 13px;
+}
+.find-count { min-width: 64px; text-align: right; font-size: 12px; color: var(--fg-muted); padding-right: 4px; font-variant-numeric: tabular-nums; }
+.find-count.none { color: var(--danger); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn:disabled:hover { background: none; }
+.find-bar .icon-btn { display: inline-flex; padding: 3px; }
+
+/* 読んでいる位置（右端の細い帯） */
+.ruler {
+  position: relative; width: 12px; flex-shrink: 0;
+  border-left: 1px solid var(--border); background: var(--bg-side); cursor: pointer; touch-action: none;
+}
+.ruler-h { position: absolute; right: 2px; height: 1px; background: var(--fg-muted); opacity: 0.45; width: 4px; pointer-events: none; }
+.ruler-h.l1, .ruler-h.l2 { height: 2px; width: 9px; background: var(--fg); opacity: 0.7; }
+.ruler-h.l3 { width: 6px; }
+.ruler-find { position: absolute; left: 1px; width: 4px; height: 2px; background: var(--find-current); pointer-events: none; }
+.ruler-view {
+  position: absolute; left: 0; right: 0; pointer-events: none;
+  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 2px; opacity: 0.8;
+}
+.ruler-tip {
+  position: absolute; right: 16px; transform: translateY(-50%); z-index: 6; pointer-events: none;
+  max-width: 280px; padding: 3px 8px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--fg); color: var(--bg); font-size: 12px; box-shadow: var(--shadow);
+}
+
+/* ポップオーバー（表示メニュー・更新のお知らせ） */
+.popover-anchor { position: relative; }
+.popover {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20;
+  min-width: 260px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg); box-shadow: var(--shadow); font-size: 12.5px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.menu-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; white-space: nowrap; }
+.menu-row.check { justify-content: flex-start; gap: 6px; cursor: pointer; }
+.menu-label { color: var(--fg-muted); }
+.icon-text { display: inline-flex; align-items: center; gap: 5px; }
+.btn.pressed { background: var(--hover); }
+.segmented button:disabled { opacity: 0.4; cursor: default; }

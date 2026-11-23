@@ -33,3 +33,14 @@ export function resolvePath(baseFile: string, rel: string): string {
 
 export const loadSession = () => invoke<string | null>("load_session");
 export const saveSession = (json: string) => invoke<void>("save_session", { json });
+export const loadSettings = () => invoke<string | null>("load_settings");
+export const saveSettings = (json: string) => invoke<void>("save_settings", { json });
+
+/** URL エンコードされている可能性のあるパスを戻す（壊れた % はそのまま） */
+export function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}

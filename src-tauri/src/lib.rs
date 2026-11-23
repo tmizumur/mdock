@@ -63,27 +63,42 @@ fn write_text(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-/// アプリの状態（開いていたフォルダ・ファイルなど）の保存先。
+/// アプリの状態（開いていたフォルダ・ファイルなど）や設定の保存先。
 /// アプリを更新しても消えない場所（~/Library/Application Support/com.mdock.app/）に置く。
-fn session_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn config_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("session.json"))
+    Ok(dir.join(name))
+}
+
+/// 書き込み途中で終了しても壊れないよう、一時ファイルに書いてから置き換える
+fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn load_session(app: AppHandle) -> Result<Option<String>, String> {
-    let path = session_path(&app)?;
+    let path = config_file(&app, "session.json")?;
     Ok(fs::read_to_string(path).ok())
 }
 
 #[tauri::command]
 fn save_session(app: AppHandle, json: String) -> Result<(), String> {
-    let path = session_path(&app)?;
-    // 書き込み途中で終了しても壊れないよう、一時ファイルに書いてから置き換える
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    write_atomic(&config_file(&app, "session.json")?, &json)
+}
+
+/// 文字サイズ・本文幅・折り返しなど、アプリ全体の設定（settings.json）
+#[tauri::command]
+fn load_settings(app: AppHandle) -> Result<Option<String>, String> {
+    let path = config_file(&app, "settings.json")?;
+    Ok(fs::read_to_string(path).ok())
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, json: String) -> Result<(), String> {
+    write_atomic(&config_file(&app, "settings.json")?, &json)
 }
 
 /// 開いているフォルダの監視。新しいフォルダを開くと前の監視は止まる。
@@ -118,7 +133,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(WatchState::default())
-        .invoke_handler(tauri::generate_handler![read_tree, read_text, write_text, watch_folder, load_session, save_session])
+        .invoke_handler(tauri::generate_handler![read_tree, read_text, write_text, watch_folder, load_session, save_session, load_settings, save_settings])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
