@@ -43,6 +43,32 @@ jobs:
             src-tauri/tauri.conf.json > /tmp/conf.json && mv /tmp/conf.json src-tauri/tauri.conf.json
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      # 前回のリリース以降に main へマージされた PR のタイトル一覧を作る。
+      # リリースの本文と latest.json の notes になり、アプリの「更新」ボタンのポップオーバーに表示される。
+      - name: Release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          PREV_TAG=$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)
+          SEARCH=""
+          if [ -n "$PREV_TAG" ]; then
+            # 前回のリリースのコミット（= そのときのマージ）より後にマージされたもの
+            SINCE=$(gh api "repos/$REPO/commits/$PREV_TAG" --jq .commit.committer.date)
+            SEARCH="merged:>$SINCE"
+          fi
+          NOTES=$(gh pr list --repo "$REPO" --state merged --base main --limit 100 --search "$SEARCH" \
+            --json number,title --jq 'sort_by(.number) | .[] | "- \(.title) (#\(.number))"' || true)
+          # PR を通さずに push された場合などは、最後のコミットのメッセージを使う
+          if [ -z "$NOTES" ]; then NOTES=$(git log -1 --format=%B); fi
+          echo "$NOTES"
+          {
+            echo "body<<NOTES_EOF"
+            echo "$NOTES"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,7 +77,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Mdock v__VERSION__
-          releaseBody: ${{ github.event.head_commit.message }}
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin --bundles app,dmg
