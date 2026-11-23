@@ -139,8 +139,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pane-body { flex: 1; min-width: 0; overflow: auto; }
 .placeholder {
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 6px; color: var(--fg-muted);
+  gap: 6px; color: var(--fg-muted); padding: 16px; text-align: center; line-height: 1.6;
 }
+.placeholder small { max-width: 32em; }
 
 /* エディタ */
 .editor { height: 100%; }
@@ -268,6 +269,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .tab.drop-before::before { left: -1px; }
 .tab.drop-after::after { right: -1px; }
+.tab.dragging { opacity: 0.5; }
+.tab, .tree-row { -webkit-user-drag: none; }
+.split-group { height: 100%; width: 100%; }
 .tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-close {
   display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
@@ -335,6 +339,27 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .context-menu button:disabled { opacity: 0.4; cursor: default; }
 .context-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 
+/* ドラッグで分割: ドロップ先のプレビュー（VS Code と同じく、落とす側の半分を色付きにする） */
+.pane-drop-area { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.drop-overlay { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+.drop-preview {
+  position: absolute; inset: 0; background: var(--accent-soft); border: 2px solid var(--accent); border-radius: 4px;
+  opacity: 0.9; transition: top 0.1s ease, right 0.1s ease, bottom 0.1s ease, left 0.1s ease;
+}
+.drop-preview.left { right: 50%; }
+.drop-preview.right { left: 50%; }
+.drop-preview.top { bottom: 50%; }
+.drop-preview.bottom { top: 50%; }
+.drop-preview.center { inset: 4px; }
+.tabbar.drop-target { background: var(--accent-soft); }
+body.dragging-item, body.dragging-item * { cursor: grabbing !important; user-select: none !important; }
+.drag-ghost {
+  position: fixed; z-index: 1000; pointer-events: none; display: flex; align-items: center; gap: 6px;
+  max-width: 240px; padding: 4px 10px; font-size: 12.5px; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 6px; box-shadow: var(--shadow);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.95;
+}
+
 /* 印刷 / PDF に書き出し: 選んだペインのプレビュー本文だけを、ライト配色で */
 @media print {
   :root {
@@ -343,9 +368,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
     color-scheme: light;
   }
   html, body, #root, .app { height: auto !important; overflow: visible !important; background: #fff; }
-  .toolbar, .sidebar, .sep, .tabbar, .pane-header, .ruler, .find-bar, .copy-btn, .modal-backdrop, .context-menu,
+  .toolbar, .sidebar, .sep, .tabbar, .pane-header, .ruler, .find-bar, .copy-btn, .modal-backdrop, .context-menu, .drop-overlay, .drag-ghost,
   .split-col.editor-body, .pane:not(.print-target), [data-panel]:not(:has(.print-target)) { display: none !important; }
-  .main, .main-v, [data-panel], [data-group], .pane, .pane-main, .pane-body, .split-edit, .split-col {
+  .main, .main-v, [data-panel], [data-group], .pane, .pane-drop-area, .pane-main, .pane-body, .split-edit, .split-col {
     display: block !important; height: auto !important; overflow: visible !important; flex: none !important; width: auto !important;
   }
   .split-col, .pane-main { border: none !important; }
