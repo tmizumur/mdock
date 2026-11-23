@@ -19,6 +19,9 @@
     "dialog:default",
     "window-state:default",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-set-title"
   ]
 }

@@ -122,6 +122,57 @@ fn watch_folder(app: AppHandle, state: State<WatchState>, root: String) -> Resul
     Ok(())
 }
 
+/// アプリのメニュー。⌘W は「タブを閉じる」にして、画面側に知らせる。
+fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let app_menu = SubmenuBuilder::new(app, "Mdock")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+    let file = SubmenuBuilder::new(app, "ファイル")
+        .item(&MenuItemBuilder::with_id("open-folder", "フォルダを開く…").accelerator("CmdOrCtrl+O").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("save", "保存").accelerator("CmdOrCtrl+S").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("close-tab", "タブを閉じる").accelerator("CmdOrCtrl+W").build(app)?)
+        .close_window_with_text("ウィンドウを閉じる")
+        .build()?;
+    let edit = SubmenuBuilder::new(app, "編集")
+        .undo_with_text("取り消す")
+        .redo_with_text("やり直す")
+        .separator()
+        .cut_with_text("カット")
+        .copy_with_text("コピー")
+        .paste_with_text("ペースト")
+        .select_all_with_text("すべてを選択")
+        .build()?;
+    let view = SubmenuBuilder::new(app, "表示").fullscreen_with_text("フルスクリーン").build()?;
+    let window = SubmenuBuilder::new(app, "ウインドウ")
+        .minimize_with_text("しまう")
+        .maximize_with_text("拡大/縮小")
+        .build()?;
+    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view, &window]).build()
+}
+
+/// メニューの操作を、いま前面にあるウィンドウに "menu" イベントで知らせる
+fn on_menu(app: &AppHandle, id: &str) {
+    let windows = app.webview_windows();
+    let target = windows
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .or_else(|| windows.values().next());
+    if let Some(w) = target {
+        let _ = w.emit_to(w.label(), "menu", id.to_string());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -133,7 +184,22 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(WatchState::default())
+        .menu(build_menu)
+        .on_menu_event(|app, ev| on_menu(app, ev.id().as_ref()))
         .invoke_handler(tauri::generate_handler![read_tree, read_text, write_text, watch_folder, load_session, save_session, load_settings, save_settings])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // ⌘Q で終了するとき: すぐには終わらず、各ウィンドウに「閉じる」を送る。
+            // 画面側で未保存の変更を確認し（保存 / 保存しない / キャンセル）、全部閉じたら終了する。
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+                let windows = app.webview_windows();
+                if !windows.is_empty() {
+                    api.prevent_exit();
+                    for w in windows.values() {
+                        let _ = w.close();
+                    }
+                }
+            }
+        });
 }

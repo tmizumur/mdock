@@ -6,7 +6,7 @@ type Props = {
   entries: Entry[];
   mdOnly: boolean;
   openPaths: string[];
-  onOpen: (path: string, otherPane: boolean) => void;
+  onOpen: (path: string, otherPane: boolean, newTab: boolean) => void;
 };
 
 /** md を含まないフォルダは「md だけ表示」のとき隠す */
@@ -70,8 +70,8 @@ const Node = memo(function Node({
       <div
         className={`tree-row file ${active ? "active" : ""} ${isMarkdown(entry.name) ? "" : "dim"}`}
         style={{ paddingLeft: pad.paddingLeft + 16 }}
-        title="クリックで開く / ⌘+クリックでもう片方のペインに開く"
-        onClick={(ev) => onOpen(entry.path, ev.metaKey || ev.ctrlKey)}
+        title="クリックで開く / ⌘+クリックでもう片方のペイン / ⌥+クリックで新しいタブ"
+        onClick={(ev) => onOpen(entry.path, ev.metaKey || ev.ctrlKey, ev.altKey)}
       >
         <TreeIcon def={fileIcon(entry.name)} />
         <span className="tree-name">{entry.name}</span>
