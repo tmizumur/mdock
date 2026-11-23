@@ -25,7 +25,7 @@ type Props = {
   content: string;
   /** スクロールする要素（ペインの本文部分） */
   scroller: React.RefObject<HTMLDivElement | null>;
-  onOpenLink: (path: string, anchor?: string) => void;
+  onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンク） */
   anchor?: { id: string; nonce: number };
   find?: FindQuery;
@@ -194,7 +194,7 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
       const raw = href.replace(/^file:\/\//, "");
       const [file, hash] = raw.split("#");
       const abs = resolvePath(path, safeDecode(file.split("?")[0]));
-      if (isMarkdown(abs)) onOpenLink(abs, hash);
+      if (isMarkdown(abs)) onOpenLink(abs, hash, e.metaKey || e.ctrlKey); // ⌘+クリックで新しいタブ
       else openPath(abs).catch((err) => console.warn("open", err)); // md 以外は既定のアプリで開く
     }
   };

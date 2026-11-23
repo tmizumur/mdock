@@ -9,6 +9,9 @@ import { useSettings } from "../lib/settings";
 type Props = {
   value: string;
   onChange: (value: string) => void;
+  /** 開いたときのスクロール位置 */
+  initialScroll?: number;
+  onScroll?: (top: number) => void;
 };
 
 export type EditorHandle = {
@@ -39,11 +42,13 @@ const JA = EditorState.phrases.of({
 });
 
 /** CodeMirror 6 の Markdown エディタ */
-const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange }, handle) {
+const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, initialScroll, onScroll }, handle) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onScrollRef = useRef(onScroll);
+  onScrollRef.current = onScroll;
   const wrapping = useRef(new Compartment());
   const { settings } = useSettings();
 
@@ -73,7 +78,13 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
     });
     view.current = v;
     v.focus();
-    return () => v.destroy();
+    if (initialScroll) requestAnimationFrame(() => (v.scrollDOM.scrollTop = initialScroll));
+    const scrolled = () => onScrollRef.current?.(v.scrollDOM.scrollTop);
+    v.scrollDOM.addEventListener("scroll", scrolled, { passive: true });
+    return () => {
+      v.scrollDOM.removeEventListener("scroll", scrolled);
+      v.destroy();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
