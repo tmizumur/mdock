@@ -1,57 +1,29 @@
-import { useState } from "react";
 import { GitCompare } from "lucide-react";
 import { type PaneState, isDirty, tabTitle } from "../lib/tabs";
 import { TreeIcon, fileIcon } from "../lib/fileIcons";
-
-const DND_TYPE = "application/x-mdock-tab";
+import { beginDrag, useDrag } from "../lib/dnd";
 
 type Props = {
-  paneIdx: number;
+  paneId: string;
   pane: PaneState;
   onActivate: (idx: number) => void;
   onClose: (idx: number) => void;
-  /** タブのドラッグ: from のペイン・位置から、このペインの toIdx の前へ */
-  onMove: (fromPane: number, fromIdx: number, toIdx: number) => void;
   onContextMenu: (idx: number, x: number, y: number) => void;
 };
 
-/** ペインの上のタブ。中クリックで閉じる、ドラッグで並べ替え・ほかのペインへ移動。 */
-export default function TabBar({ paneIdx, pane, onActivate, onClose, onMove, onContextMenu }: Props) {
-  const [dropAt, setDropAt] = useState<number | null>(null);
-
-  const readDrag = (e: React.DragEvent) => {
-    try {
-      return JSON.parse(e.dataTransfer.getData(DND_TYPE)) as { pane: number; idx: number };
-    } catch {
-      return null;
-    }
-  };
-  const accept = (e: React.DragEvent) => e.dataTransfer.types.includes(DND_TYPE);
+/**
+ * ペインの上のタブ。中クリックで閉じる。
+ * ドラッグで並べ替え・ほかのペインへ移動・ペインの端に落として分割（移動の処理は App の setDropHandler）。
+ */
+export default function TabBar({ paneId, pane, onActivate, onClose, onContextMenu }: Props) {
+  const drag = useDrag();
+  const dropAt = drag.target?.type === "tabbar" && drag.target.paneId === paneId ? drag.target.index : null;
+  const draggingId = drag.item?.kind === "tab" ? drag.item.tabId : null;
 
   if (!pane.tabs.length) return null;
 
   return (
-    <div
-      className="tabbar"
-      role="tablist"
-      onDragOver={(e) => {
-        if (!accept(e)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (e.target === e.currentTarget) setDropAt(pane.tabs.length);
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropAt(null);
-      }}
-      onDrop={(e) => {
-        const d = readDrag(e);
-        const to = dropAt ?? pane.tabs.length;
-        setDropAt(null);
-        if (!d) return;
-        e.preventDefault();
-        onMove(d.pane, d.idx, to);
-      }}
-    >
+    <div className={`tabbar ${dropAt !== null ? "drop-target" : ""}`} role="tablist">
       {pane.tabs.map((t, i) => {
         const dirty = isDirty(t);
         return (
@@ -59,19 +31,11 @@ export default function TabBar({ paneIdx, pane, onActivate, onClose, onMove, onC
             key={t.id}
             role="tab"
             aria-selected={i === pane.active}
-            className={`tab ${i === pane.active ? "on" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
+            className={`tab ${i === pane.active ? "on" : ""} ${draggingId === t.id ? "dragging" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
             title={t.kind === "doc" ? t.path : `${t.left}\n↔ ${t.right}`}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(DND_TYPE, JSON.stringify({ pane: paneIdx, idx: i }));
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onDragOver={(e) => {
-              if (!accept(e)) return;
-              e.preventDefault();
-              e.stopPropagation();
-              const r = e.currentTarget.getBoundingClientRect();
-              setDropAt(e.clientX < r.left + r.width / 2 ? i : i + 1);
+            onPointerDown={(e) => {
+              if ((e.target as HTMLElement).closest(".tab-close")) return;
+              beginDrag(e, { kind: "tab", paneId, tabId: t.id, title: tabTitle(t) });
             }}
             onMouseDown={(e) => {
               if (e.button === 0) onActivate(i);

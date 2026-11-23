@@ -6,6 +6,7 @@ import DiffView from "./DiffView";
 import type { EditorHandle } from "./Editor";
 import type { Heading } from "./OverviewRuler";
 import { type DocTab, type PaneState, type ViewMode, activeTab, isDirty } from "../lib/tabs";
+import { useDrag } from "../lib/dnd";
 import { editorTopLine, previewTopLine, scrollEditorToLine, scrollPreviewToLine } from "../lib/scrollSync";
 
 // エディタは編集モードにしたときだけ読み込む（起動を速くするため）
@@ -15,7 +16,8 @@ const Editor = lazy(() => import("./Editor"));
 export type PaneCommand = { type: "find"; n: number };
 
 type Props = {
-  idx: number;
+  /** ペイン ID（分割ツリーの葉） */
+  idx: string;
   pane: PaneState;
   active: boolean;
   rootDir: string | null;
@@ -26,7 +28,6 @@ type Props = {
   onFocus: () => void;
   onActivateTab: (i: number) => void;
   onCloseTab: (i: number) => void;
-  onMoveTab: (fromPane: number, fromIdx: number, toIdx: number) => void;
   onTabMenu: (i: number, x: number, y: number) => void;
   onChange: (content: string) => void;
   onMode: (mode: ViewMode) => void;
@@ -68,13 +69,13 @@ export default function Pane(props: Props) {
   return (
     <section className={`pane ${active ? "active" : ""} ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} data-pane={idx}>
       <TabBar
-        paneIdx={idx}
+        paneId={idx}
         pane={pane}
         onActivate={props.onActivateTab}
         onClose={props.onCloseTab}
-        onMove={props.onMoveTab}
         onContextMenu={props.onTabMenu}
       />
+      <div className="pane-drop-area">
       {doc && (
         <header className="pane-header">
           <span className="pane-title" title={doc.path}>
@@ -111,8 +112,8 @@ export default function Pane(props: Props) {
       )}
       {!tab ? (
         <div className="placeholder">
-          左のツリーからファイルを選んでください
-          <small>⌘+クリックでもう片方のペイン、⌥+クリックで新しいタブに開けます</small>
+          左のツリーからファイルを選ぶか、ここにドラッグしてください
+          <small>⌘+クリックで隣のペイン、⌥+クリックで新しいタブに開けます。タブやファイルをペインの端にドラッグすると画面を分割できます</small>
         </div>
       ) : tab.kind === "diff" ? (
         <div className="pane-main">
@@ -160,7 +161,20 @@ export default function Pane(props: Props) {
           onScroll={(top) => onScroll(tab.id, top)}
         />
       )}
+      <DropOverlay paneId={idx} />
+      </div>
     </section>
+  );
+}
+
+/** ドラッグ中、このペインに落としたときの位置（端なら分割、中央ならタブ）を半透明で示す */
+function DropOverlay({ paneId }: { paneId: string }) {
+  const { target } = useDrag();
+  if (target?.type !== "pane" || target.paneId !== paneId) return null;
+  return (
+    <div className="drop-overlay" aria-hidden>
+      <div className={`drop-preview ${target.zone}`} />
+    </div>
   );
 }
 
@@ -175,7 +189,7 @@ function SplitEditor({
   initialScroll,
   onScroll,
 }: {
-  idx: number;
+  idx: string;
   tab: DocTab;
   editor: React.RefObject<EditorHandle | null>;
   onChange: (content: string) => void;

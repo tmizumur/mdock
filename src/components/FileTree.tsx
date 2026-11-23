@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { beginDrag } from "../lib/dnd";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Entry, copyText, createEntry, dirname, isMarkdown, norm, renameEntry, trashEntry } from "../lib/api";
@@ -305,7 +306,8 @@ const Row = memo(function Row({
       role="treeitem"
       aria-selected={selected}
       style={{ paddingLeft: pad + 16 }}
-      title="クリックで開く / ⌘+クリックでもう片方のペイン / ⌥+クリックで新しいタブ"
+      title="クリックで開く / ⌘+クリックで隣のペイン / ⌥+クリックで新しいタブ / ペインへドラッグ（端に落とすと分割）"
+      onPointerDown={(e) => beginDrag(e, { kind: "file", path: entry.path, title: entry.name })}
       onClick={onClick}
       onContextMenu={onContextMenu}
     >
