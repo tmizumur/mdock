@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { loadSettings, saveSettings } from "./api";
 
 export type DocWidth = "normal" | "wide" | "full";
@@ -11,9 +12,11 @@ export type Settings = {
   width: DocWidth;
   /** エディタとプレビューのコードブロックを折り返す */
   wrap: boolean;
+  /** ツリーに . から始まるファイル・フォルダも出す */
+  showHidden: boolean;
 };
 
-export const DEFAULT_SETTINGS: Settings = { fontSize: 15, width: "normal", wrap: true };
+export const DEFAULT_SETTINGS: Settings = { fontSize: 15, width: "normal", wrap: true, showHidden: false };
 export const FONT_MIN = 10;
 export const FONT_MAX = 28;
 
@@ -49,12 +52,35 @@ export function SettingsProvider({ initial, children }: { initial: Settings; chi
     });
   }, []);
 
+  // ほかのウィンドウで設定を変えたら、こちらにも反映する
+  const remote = useRef<string | null>(null);
+  useEffect(() => {
+    const un = listen<string>("settings-changed", (ev) => {
+      try {
+        const next = { ...DEFAULT_SETTINGS, ...JSON.parse(ev.payload) } as Settings;
+        setSettings((cur) => {
+          if (JSON.stringify(cur) === JSON.stringify(next)) return cur;
+          remote.current = JSON.stringify(next);
+          return next;
+        });
+      } catch {
+        /* 壊れた内容は無視 */
+      }
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
   useEffect(() => {
     if (first.current) {
       first.current = false;
       return;
     }
-    saveSettings(JSON.stringify(settings)).catch((e) => console.warn("save settings", e));
+    const json = JSON.stringify(settings);
+    if (remote.current === json) return; // ほかのウィンドウから来た変更は書き戻さない
+    remote.current = null;
+    saveSettings(json).catch((e) => console.warn("save settings", e));
   }, [settings]);
 
   return <SettingsContext.Provider value={{ settings, update }}>{children}</SettingsContext.Provider>;

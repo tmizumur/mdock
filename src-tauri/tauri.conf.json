@@ -17,7 +17,9 @@
         "height": 820,
         "minWidth": 640,
         "minHeight": 400,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "create": false,
+        "label": "main"
       }
     ],
     "security": {
@@ -42,6 +44,20 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown",
+          "mdx"
+        ],
+        "name": "Markdown",
+        "description": "Markdown 文書",
+        "role": "Editor",
+        "mimeType": "text/markdown",
+        "rank": "Default"
+      }
     ]
   },
   "plugins": {

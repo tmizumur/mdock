@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Printer } from "lucide-react";
 import PreviewPane, { type FindState } from "./PreviewPane";
 import TabBar from "./TabBar";
 import DiffView from "./DiffView";
@@ -31,6 +32,9 @@ type Props = {
   onMode: (mode: ViewMode) => void;
   onSave: () => void;
   onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
+  onPrint: () => void;
+  /** 印刷するときに出すペイン（前面のペイン） */
+  printTarget: boolean;
 };
 
 const MODES: [ViewMode, string, string][] = [
@@ -62,7 +66,7 @@ export default function Pane(props: Props) {
   const rel = doc && rootDir && doc.path.startsWith(rootDir) ? doc.path.slice(rootDir.length + 1) : doc?.path;
 
   return (
-    <section className={`pane ${active ? "active" : ""}`} onMouseDown={onFocus} data-pane={idx}>
+    <section className={`pane ${active ? "active" : ""} ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} data-pane={idx}>
       <TabBar
         paneIdx={idx}
         pane={pane}
@@ -99,6 +103,9 @@ export default function Pane(props: Props) {
                 保存
               </button>
             )}
+            <button className="icon-btn" onClick={props.onPrint} title="印刷 / PDF に書き出し">
+              <Printer size={15} />
+            </button>
           </span>
         </header>
       )}

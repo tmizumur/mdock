@@ -57,6 +57,10 @@ export default function ViewMenu({ children }: { children?: ReactNode }) {
             <input type="checkbox" checked={settings.wrap} onChange={(e) => update({ wrap: e.target.checked })} />
             長い行を折り返す（エディタとコードブロック）
           </label>
+          <label className="menu-row check">
+            <input type="checkbox" checked={settings.showHidden} onChange={(e) => update({ showHidden: e.target.checked })} />
+            隠しファイルを表示（. で始まるもの）
+          </label>
           {children}
         </div>
       )}

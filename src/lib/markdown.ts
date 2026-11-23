@@ -213,3 +213,15 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
     leftover?.parentNode?.removeChild(leftover);
   }
 }
+
+/** 印刷の前に、まだ描いていないコードの色付け・図・画像をすべて描いておく */
+export async function renderAllPending(root: HTMLElement): Promise<void> {
+  const jobs: Promise<unknown>[] = [];
+  root.querySelectorAll<HTMLElement>("pre[data-lang]:not([data-hl])").forEach((el) => jobs.push(highlightBlock(el)));
+  root.querySelectorAll<HTMLElement>(".mermaid-block:not([data-processed])").forEach((el) => jobs.push(renderMermaidBlock(el)));
+  root.querySelectorAll<HTMLImageElement>("img").forEach((img) => {
+    img.loading = "eager";
+    if (!img.complete) jobs.push(new Promise((r) => ((img.onload = r), (img.onerror = r))));
+  });
+  await Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, 5000))]);
+}

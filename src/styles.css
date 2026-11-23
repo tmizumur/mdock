@@ -94,14 +94,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .sidebar-head label { text-transform: none; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
-.tree { overflow: auto; flex: 1; padding-bottom: 16px; }
+.tree { overflow: auto; flex: 1; min-height: 0; padding-bottom: 16px; outline: none; }
+.tree-item { position: absolute; top: 0; left: 0; right: 0; }
 .tree-row {
   display: flex; align-items: center; gap: 6px;
   padding: 3px 8px; white-space: nowrap; overflow: hidden;
   cursor: pointer; font-size: 13px; border-radius: 4px; margin: 0 4px;
 }
+.tree-row { height: 26px; }
 .tree-row:hover { background: var(--hover); }
+.tree:focus-visible .tree-row.selected, .tree:focus .tree-row.selected { box-shadow: inset 0 0 0 1px var(--accent); }
+.tree-row.editing { cursor: default; background: none; }
+.tree-input {
+  flex: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; outline: none;
+}
 .tree-row.active { background: var(--accent-soft); color: var(--accent); }
 .tree-row.dim { color: var(--fg-muted); }
 .tree-row .chev { display: inline-block; width: 10px; flex-shrink: 0; color: var(--fg-muted); font-size: 10px; }
@@ -127,6 +134,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pane.active .pane-title { color: var(--fg); }
 .dirty { color: var(--accent); margin-left: 6px; }
 .pane-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.pane-actions .icon-btn { display: inline-flex; padding: 4px; }
 .pane-main { flex: 1; min-height: 0; display: flex; position: relative; }
 .pane-body { flex: 1; min-width: 0; overflow: auto; }
 .placeholder {
@@ -326,3 +334,25 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .context-menu button:hover:not(:disabled) { background: var(--accent); color: #fff; }
 .context-menu button:disabled { opacity: 0.4; cursor: default; }
 .context-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* 印刷 / PDF に書き出し: 選んだペインのプレビュー本文だけを、ライト配色で */
+@media print {
+  :root {
+    --bg: #ffffff; --bg-side: #f6f7f9; --bg-code: #f4f5f7; --fg: #1f2328; --fg-muted: #656d76;
+    --border: #d8dee4; --accent: #2f6feb;
+    color-scheme: light;
+  }
+  html, body, #root, .app { height: auto !important; overflow: visible !important; background: #fff; }
+  .toolbar, .sidebar, .sep, .tabbar, .pane-header, .ruler, .find-bar, .copy-btn, .modal-backdrop, .context-menu,
+  .split-col.editor-body, .pane:not(.print-target), [data-panel]:not(:has(.print-target)) { display: none !important; }
+  .main, .main-v, [data-panel], [data-group], .pane, .pane-main, .pane-body, .split-edit, .split-col {
+    display: block !important; height: auto !important; overflow: visible !important; flex: none !important; width: auto !important;
+  }
+  .split-col, .pane-main { border: none !important; }
+  .markdown-body { max-width: none !important; padding: 0 !important; font-size: 11pt; }
+  .markdown-body pre, .markdown-body pre code { white-space: pre-wrap !important; overflow-wrap: anywhere; }
+  .markdown-body pre, .markdown-body table, .mermaid-block, .markdown-body img { break-inside: avoid; }
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 { break-after: avoid; }
+  .shiki, .shiki span { color: var(--shiki-light) !important; }
+  ::highlight(mdock-find), ::highlight(mdock-find-current) { background-color: transparent; color: inherit; }
+}

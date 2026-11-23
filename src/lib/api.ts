@@ -7,7 +7,7 @@ export type Entry = {
   children: Entry[];
 };
 
-export const readTree = (root: string) => invoke<Entry[]>("read_tree", { root });
+export const readTree = (root: string, showHidden = false) => invoke<Entry[]>("read_tree", { root, showHidden });
 export const readText = (path: string) => invoke<string>("read_text", { path });
 export const writeText = (path: string, content: string) =>
   invoke<void>("write_text", { path, content });
@@ -42,5 +42,33 @@ export function safeDecode(s: string): string {
     return decodeURIComponent(s);
   } catch {
     return s;
+  }
+}
+
+// ---- ファイル操作（開いているフォルダの中だけ） ----
+export const createEntry = (dir: string, name: string, isDir: boolean) =>
+  invoke<string>("create_entry", { dir, name, isDir });
+export const renameEntry = (path: string, newName: string) => invoke<string>("rename_entry", { path, newName });
+export const trashEntry = (path: string) => invoke<void>("trash_entry", { path });
+
+// ---- ウィンドウ・印刷・Finder から開かれたファイル ----
+export const openNewWindow = () => invoke<void>("open_new_window");
+export const cancelQuit = () => invoke<void>("cancel_quit");
+export const printWindow = () => invoke<void>("print_window");
+export const takePendingOpens = () => invoke<string[]>("take_pending_opens");
+
+/** クリップボードにコピー（使えない環境では execCommand で代わりに） */
+export async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.parentNode?.removeChild(ta);
   }
 }
