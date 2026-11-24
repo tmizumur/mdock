@@ -4,6 +4,11 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowUpCircle } from "lucide-react";
 import { renderMarkdown } from "../lib/markdown";
+import { useSettings } from "../lib/settings";
+
+/** 設定画面の「今すぐ確認」から呼ぶ。新しい版があればその番号、なければ null */
+let manualCheck: (() => Promise<string | null>) | null = null;
+export const checkForUpdateNow = () => (manualCheck ? manualCheck() : Promise.resolve(null));
 
 type Props = {
   /** 再起動の前に、開いているフォルダや未保存の編集を確実に書き出す */
@@ -35,8 +40,22 @@ export default function UpdateButton({ beforeRestart }: Props) {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const { settings } = useSettings();
 
   useEffect(() => {
+    manualCheck = async () => {
+      const u = await check(); // 失敗したら呼び出し元（設定画面）にエラーを返す
+      if (u) setUpdate(u);
+      return u ? u.version : null;
+    };
+    return () => {
+      manualCheck = null;
+    };
+  }, []);
+
+  // 自動確認（設定でオフにできる）
+  useEffect(() => {
+    if (!settings.autoUpdate) return;
     const run = () =>
       check()
         .then((u) => u && setUpdate(u))
@@ -44,7 +63,7 @@ export default function UpdateButton({ beforeRestart }: Props) {
     run();
     const t = window.setInterval(run, CHECK_INTERVAL);
     return () => window.clearInterval(t);
-  }, []);
+  }, [settings.autoUpdate]);
 
   // ポップオーバーの外をクリック・Esc で閉じる（更新中は閉じない）
   useEffect(() => {

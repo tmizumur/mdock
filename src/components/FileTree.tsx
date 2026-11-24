@@ -5,6 +5,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Entry, copyText, createEntry, dirname, isMarkdown, norm, renameEntry, trashEntry } from "../lib/api";
 import { TreeIcon, fileIcon, folderIcon } from "../lib/fileIcons";
 import { ContextMenu, type MenuItem } from "./Dialogs";
+import type { GitLookup, GitMark } from "../lib/git";
 
 type Props = {
   root: string;
@@ -17,6 +18,8 @@ type Props = {
   /** 名前を変えたとき（開いているタブのパスを直す） */
   onRenamed: (from: string, to: string) => void;
   onError: (message: string) => void;
+  /** git の変更状態（リポジトリでない・設定でオフのときは何も返さない） */
+  git: GitLookup;
 };
 
 /** md を含まないフォルダは「md だけ表示」のとき隠す（作ったばかりのものは keep で残す） */
@@ -40,7 +43,7 @@ const ROW_H = 26;
  * ファイルツリー。展開している行を平らなリストにして、見えている行だけ描く（1万ファイルでも軽い）。
  * ↑↓ で移動、→← で開閉、Enter で開く。右クリックでファイル操作。
  */
-export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onChanged, onRenamed, onError }: Props) {
+export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onChanged, onRenamed, onError, git }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -244,6 +247,8 @@ export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onC
               ) : (
                 <Row
                   entry={r.entry}
+                  gitMark={git.get(r.entry.path)?.mark}
+                  gitFolder={git.get(r.entry.path)?.folder ?? false}
                   depth={r.depth}
                   expanded={r.entry.is_dir && isOpen(r.entry, r.depth)}
                   active={!r.entry.is_dir && openPaths.includes(r.entry.path)}
@@ -265,8 +270,12 @@ export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onC
   );
 }
 
+const GIT_TITLE: Record<GitMark, string> = { M: "変更あり", A: "追加（ステージ済み）", U: "未追跡", C: "競合", I: "無視（.gitignore）" };
+
 const Row = memo(function Row({
   entry,
+  gitMark,
+  gitFolder,
   depth,
   expanded,
   active,
@@ -275,6 +284,8 @@ const Row = memo(function Row({
   onContextMenu,
 }: {
   entry: Entry;
+  gitMark?: GitMark;
+  gitFolder: boolean;
   depth: number;
   expanded: boolean;
   active: boolean;
@@ -283,10 +294,20 @@ const Row = memo(function Row({
   onContextMenu: (ev: React.MouseEvent) => void;
 }) {
   const pad = 8 + depth * 14;
+  const gitCls = gitMark ? `git-${gitMark}` : "";
+  // 右端の印: ファイルは M / U / A / C、変更を含むフォルダは点（無視されたものは薄くするだけ）
+  const gitEnd =
+    !gitMark || gitMark === "I" ? null : gitFolder || entry.is_dir ? (
+      <span className="git-dot" title={gitFolder ? "中に変更があります" : GIT_TITLE[gitMark]} />
+    ) : (
+      <span className="git-badge" title={GIT_TITLE[gitMark]}>
+        {gitMark === "C" ? "!" : gitMark}
+      </span>
+    );
   if (entry.is_dir) {
     return (
       <div
-        className={`tree-row dir ${selected ? "selected" : ""}`}
+        className={`tree-row dir ${selected ? "selected" : ""} ${gitCls}`}
         role="treeitem"
         aria-expanded={expanded}
         aria-selected={selected}
@@ -297,12 +318,13 @@ const Row = memo(function Row({
         <span className="chev">{expanded ? "▾" : "▸"}</span>
         <TreeIcon def={folderIcon(entry.name, expanded)} />
         <span className="tree-name">{entry.name}</span>
+        {gitEnd}
       </div>
     );
   }
   return (
     <div
-      className={`tree-row file ${active ? "active" : ""} ${selected ? "selected" : ""} ${isMarkdown(entry.name) ? "" : "dim"}`}
+      className={`tree-row file ${active ? "active" : ""} ${selected ? "selected" : ""} ${isMarkdown(entry.name) ? "" : "dim"} ${gitCls}`}
       role="treeitem"
       aria-selected={selected}
       style={{ paddingLeft: pad + 16 }}
@@ -313,6 +335,7 @@ const Row = memo(function Row({
     >
       <TreeIcon def={fileIcon(entry.name)} />
       <span className="tree-name">{entry.name}</span>
+      {gitEnd}
     </div>
   );
 });

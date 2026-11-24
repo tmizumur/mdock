@@ -3,6 +3,7 @@ import anchor from "markdown-it-anchor";
 import type { HighlighterGeneric } from "shiki";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath, safeDecode } from "./api";
+import { isDarkTheme } from "./theme";
 
 /** よく使う言語だけ先に読み込む。それ以外はプレーン表示。 */
 const LANGS = [
@@ -51,7 +52,7 @@ class Cache {
 const hlCache = new Cache(3000);
 const mermaidCache = new Cache(300);
 
-const isDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+const isDark = isDarkTheme;
 const hlKey = (lang: string, code: string) => `${lang}\u0000${code}`;
 const mermaidKey = (code: string) => `${isDark() ? "d" : "l"}\u0000${code}`;
 
@@ -95,7 +96,8 @@ md.renderer.rules.fence = (tokens, idx) => {
   if (lang === "mermaid") {
     const svg = mermaidCache.get(mermaidKey(code));
     if (svg) return `<div class="mermaid-block" data-processed="1"${line}>${svg}</div>`;
-    return `<div class="mermaid-block"${line}><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
+    // 配色を入れておく（テーマを切り替えたとき、同じ HTML とみなされて描き直されないのを防ぐ）
+    return `<div class="mermaid-block" data-theme="${isDark() ? "dark" : "light"}"${line}><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
   }
   // （```math は KaTeX プラグインが先に処理する）
   const cached = lang ? hlCache.get(hlKey(lang, code)) : undefined;
@@ -180,6 +182,8 @@ export async function highlightBlock(pre: HTMLElement): Promise<void> {
 }
 
 let mermaidLoaded: Promise<typeof import("mermaid").default> | null = null;
+/** いま Mermaid に設定している配色（テーマを切り替えたら設定し直す） */
+let mermaidTheme = "";
 let mermaidSeq = 0;
 
 /** Mermaid 図を描画する（初めて図が見えたときにライブラリを読み込む） */
@@ -190,12 +194,14 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
   if (!pre) return;
   const code = pre.textContent ?? "";
   if (!mermaidLoaded) {
-    mermaidLoaded = import("mermaid").then((m) => {
-      m.default.initialize({ startOnLoad: false, theme: isDark() ? "dark" : "default" });
-      return m.default;
-    });
+    mermaidLoaded = import("mermaid").then((m) => m.default);
   }
   const mermaid = await mermaidLoaded;
+  const theme = isDark() ? "dark" : "default";
+  if (mermaidTheme !== theme) {
+    mermaid.initialize({ startOnLoad: false, theme });
+    mermaidTheme = theme;
+  }
   const key = mermaidKey(code);
   const id = `mermaid-${++mermaidSeq}`;
   try {

@@ -101,7 +101,7 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
     }
   }, [value]);
 
-  return <div className="editor" ref={host} />;
+  return <div className={`editor font-${settings.editorFont}`} ref={host} />;
 });
 
 export default Editor;
