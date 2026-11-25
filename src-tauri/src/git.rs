@@ -136,6 +136,14 @@ pub fn find_git_dir(root: &Path) -> Option<PathBuf> {
     root.ancestors().map(|d| d.join(".git")).find(|g| g.is_dir())
 }
 
+/// 現在のブランチ。detached HEAD ではコミットの短いハッシュを返す。
+pub fn branch(root: &str) -> Option<String> {
+    let dir = Path::new(root);
+    let name = git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .or_else(|| git(dir, &["rev-parse", "--short", "HEAD"]))?;
+    Some(String::from_utf8_lossy(&name).trim_end().to_owned())
+}
+
 /// root の git の状態。git リポジトリでない・git が無いときは None。
 pub fn status(root: &str) -> Option<Vec<GitEntry>> {
     let dir = Path::new(root);
@@ -221,6 +229,8 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let run = |args: &[&str]| assert!(git(&base, args).is_some(), "git {args:?}");
         run(&["init", "-q"]);
+        run(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+        assert_eq!(branch(sub.to_str().unwrap()).as_deref(), Some("main"));
         run(&["config", "user.email", "t@example.com"]);
         run(&["config", "user.name", "t"]);
         std::fs::write(base.join(".gitignore"), "*.log\n").unwrap();

@@ -1,15 +1,13 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { Group, Layout, Panel, Separator } from "react-resizable-panels";
+import { Group, Layout, Panel, Separator, type PanelImperativeHandle } from "react-resizable-panels";
 import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Columns2, Columns3, Rows2, Settings as SettingsIcon, Square } from "lucide-react";
 import FileTree from "./components/FileTree";
-import UpdateButton from "./components/UpdateButton";
 import Pane, { PaneCommand } from "./components/Pane";
-import ViewMenu from "./components/ViewMenu";
+import WindowBar from "./components/WindowBar";
 import SettingsDialog from "./components/SettingsDialog";
 import { useGitStatus } from "./lib/git";
 import { ContextMenu, type MenuItem, useUnsavedDialog } from "./components/Dialogs";
@@ -48,13 +46,6 @@ async function restoreSession(): Promise<Session> {
   }
   return defaultSession();
 }
-
-const LAYOUTS: [PresetLayout, string, typeof Square][] = [
-  ["single", "1画面", Square],
-  ["cols2", "左右に2分割", Columns2],
-  ["rows2", "上下に2分割", Rows2],
-  ["cols3", "左右に3分割", Columns3],
-];
 
 /** ペインの集まりと、その並べ方（分割ツリー） */
 type Workspace = { panes: Record<string, PaneState>; layout: LayoutNode };
@@ -123,6 +114,8 @@ export default function App() {
   const { ask, dialog } = useUnsavedDialog();
   /** サイドバーとペイン全体の幅 */
   const sidebarLayout = useRef<Session["sidebar"]>(undefined);
+  const sidebarPanel = useRef<PanelImperativeHandle>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   /** タブごとのスクロール位置（タブ ID → px） */
   const scrolls = useRef(new Map<string, number>());
 
@@ -230,19 +223,6 @@ export default function App() {
     [focusPane],
   );
 
-  /** フォルダを開く（ツリー読み込み + 監視開始） */
-  const openFolder = useCallback(async (dir: string) => {
-    try {
-      const entries = await readTree(dir, hiddenRef.current);
-      setRoot(dir);
-      setTree(entries);
-      await watchFolder(dir);
-      setError(null);
-    } catch (e) {
-      setError(`フォルダを開けませんでした: ${e}`);
-    }
-  }, []);
-
   /** 未保存のタブがあれば確認する。true なら続けてよい */
   const confirmDirty = useCallback(
     async (tabs: Tab[]): Promise<boolean> => {
@@ -263,17 +243,31 @@ export default function App() {
   );
 
   /** すべてのタブを閉じる（分割の形はそのまま） */
-  const clearTabs = () => {
+  const clearTabs = useCallback(() => {
     apply((w) => mapPanes(w, () => emptyPane()));
     scrolls.current.clear();
-  };
+  }, [apply]);
+
+  /** フォルダのツリーを読み込み、監視を開始する */
+  const openFolder = useCallback(async (dir: string, replaceTabs = false) => {
+    try {
+      const entries = await readTree(dir, hiddenRef.current);
+      if (replaceTabs) {
+        if (!(await confirmDirty(allTabs(wsRef.current)))) return;
+        clearTabs();
+      }
+      setRoot(dir);
+      setTree(entries);
+      await watchFolder(dir);
+      setError(null);
+    } catch (e) {
+      setError(`フォルダを開けませんでした: ${e}`);
+    }
+  }, [clearTabs, confirmDirty, setTree]);
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false });
-    if (typeof dir !== "string") return;
-    if (!(await confirmDirty(allTabs(wsRef.current)))) return;
-    clearTabs();
-    openFolder(dir);
+    if (typeof dir === "string") await openFolder(dir, true);
   };
 
   /** タブを保存する。同じファイルを開いているほかのタブ（未編集のもの）にも反映する */
@@ -854,14 +848,12 @@ export default function App() {
         openFile(p, activeRef.current, { newTab: true });
         return;
       }
-      if (!(await confirmDirty(allTabs(wsRef.current)))) return;
-      clearTabs();
-      openFolder(p);
+      openFolder(p, true);
     });
     return () => {
       un.then((f) => f());
     };
-  }, [openFolder, openFile, confirmDirty]);
+  }, [openFolder, openFile]);
 
   const refreshTree = useCallback(() => {
     const r = rootRef.current;
@@ -1113,33 +1105,24 @@ export default function App() {
 
   return (
     <div className="app" style={{ "--doc-font-size": `${settings.fontSize}px` } as React.CSSProperties}>
-      <header className="toolbar">
-        <button className="btn" onClick={pickFolder} title="フォルダを開く (⌘O)">
-          フォルダを開く
-        </button>
-        <span className="root-name" title={root ?? ""}>
-          {root ? norm(root).split("/").pop() : ""}
-        </span>
-        <span className="spacer" />
-        {error && <span className="error">{error}</span>}
-        <UpdateButton beforeRestart={flush} />
-        <ViewMenu />
-        <button className="btn icon-only" onClick={() => setSettingsOpen(true)} title="設定 (⌘,)" aria-label="設定">
-          <SettingsIcon size={15} />
-        </button>
-        <div className="segmented icons" role="group" aria-label="レイアウトのリセット">
-          {LAYOUTS.map(([l, label, Icon]) => (
-            <button
-              key={l}
-              onClick={() => resetLayout(l)}
-              title={`レイアウトをリセット: ${label}\n（タブやファイルをペインの端にドラッグすると、自由に分割できます。⌘\\ で右に分割）`}
-              aria-label={`レイアウトをリセット: ${label}`}
-            >
-              <Icon size={15} />
-            </button>
-          ))}
-        </div>
-      </header>
+      <WindowBar
+        root={root}
+        branch={git.branch}
+        error={error}
+        layout={ws.layout}
+        sidebarOpen={sidebarOpen}
+        ready={ready}
+        onToggleSidebar={() => {
+          const panel = sidebarPanel.current;
+          if (panel?.isCollapsed()) panel.expand();
+          else panel?.collapse();
+        }}
+        onPickFolder={pickFolder}
+        onOpenFolder={(dir) => openFolder(dir, true)}
+        onLayout={resetLayout}
+        onSettings={() => setSettingsOpen(true)}
+        beforeRestart={flush}
+      />
 
       {ready && (
         <Group
@@ -1151,7 +1134,8 @@ export default function App() {
             schedulePersist();
           }}
         >
-          <Panel id="sidebar" defaultSize="22" minSize={160} collapsible>
+          <Panel id="sidebar" defaultSize={264} minSize={160} groupResizeBehavior="preserve-pixel-size" collapsible panelRef={sidebarPanel}
+            onResize={(size) => setSidebarOpen(size.asPercentage > 0)}>
             <aside className="sidebar">
               <div className="sidebar-head">
                 <span>ファイル</span>
@@ -1170,7 +1154,7 @@ export default function App() {
                   onChanged={refreshTree}
                   onRenamed={onRenamed}
                   onError={setError}
-                  git={git}
+                  git={git.lookup}
                 />
               ) : (
                 <div className="tree-empty">

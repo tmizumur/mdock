@@ -70,7 +70,7 @@ function findAnchor(root: HTMLElement, raw: string): HTMLElement | null {
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */
 function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFindResult, onRendered, immediate = false }: Props) {
   const ref = useRef<HTMLElement>(null);
-  const { settings, dark } = useSettings();
+  const { settings } = useSettings();
   const source = useSettledContent(path, content, immediate);
   const [mathOn, setMathOn] = useState(mathReady());
   // 描き直した回数（DOM が変わったら検索や見出し位置を計算し直す）
@@ -81,9 +81,8 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
     if (needMath) loadMath().then(() => setMathOn(true), (e) => console.warn("katex", e));
   }, [needMath]);
 
-  // テーマを切り替えたら Mermaid の図をその配色で描き直す
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const html = useMemo(() => renderMarkdown(source, path), [source, path, mathOn, dark]);
+  const html = useMemo(() => renderMarkdown(source, path), [source, path, mathOn]);
 
   // 描画後: 生 HTML の相対パス画像を直し、コード・図は見えたときに描く
   useLayoutEffect(() => {

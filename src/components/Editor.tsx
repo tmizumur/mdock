@@ -41,6 +41,17 @@ const JA = EditorState.phrases.of({
   go: "移動",
 });
 
+const editorTheme = EditorView.theme({
+  "&": { backgroundColor: "var(--bg)", color: "var(--fg)" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--fg-faint)", borderInlineEnd: "1px solid var(--border-soft)" },
+  ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--bg-elev)" },
+  ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": { background: "var(--accent-soft)" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--fg)" },
+  ".cm-panels": { backgroundColor: "var(--bg-side)", color: "var(--fg)" },
+  ".cm-panels-top, .cm-panels-bottom": { borderColor: "var(--border)" },
+  ".cm-textfield, .cm-button": { background: "var(--bg-elev)", color: "var(--fg)", borderColor: "var(--border)", borderRadius: "var(--radius-small)" },
+}, { dark: true });
+
 /** CodeMirror 6 の Markdown エディタ */
 const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, initialScroll, onScroll }, handle) {
   const host = useRef<HTMLDivElement>(null);
@@ -67,6 +78,7 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
         doc: value,
         extensions: [
           basicSetup,
+          editorTheme,
           JA,
           markdown({ codeLanguages: languages }),
           wrapping.current.of(settings.wrap ? EditorView.lineWrapping : []),

@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { GitCompare } from "lucide-react";
 import { type PaneState, isDirty, tabTitle } from "../lib/tabs";
 import { TreeIcon, fileIcon } from "../lib/fileIcons";
@@ -19,16 +20,49 @@ export default function TabBar({ paneId, pane, onActivate, onClose, onContextMen
   const drag = useDrag();
   const dropAt = drag.target?.type === "tabbar" && drag.target.paneId === paneId ? drag.target.index : null;
   const draggingId = drag.item?.kind === "tab" ? drag.item.tabId : null;
+  const barRef = useRef<HTMLDivElement>(null);
+  const lastOrder = useRef("");
+  const positions = useRef(new Map<string, number>());
+  const tabOrder = pane.tabs.map((tab) => tab.id).join(",");
+
+  // 並び順の変更後、残ったタブを移動前の位置から滑らせる。
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    const tabs = bar?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? [];
+    const next = new Map<string, number>();
+    const moved: HTMLElement[] = [];
+    const reordered = lastOrder.current !== tabOrder;
+    for (const tab of tabs) {
+      const id = tab.dataset.tabId!;
+      const x = tab.offsetLeft;
+      const previous = positions.current.get(id);
+      next.set(id, x);
+      if (!reordered || previous === undefined || previous === x) continue;
+      tab.style.transition = "none";
+      tab.style.translate = `${previous - x}px`;
+      moved.push(tab);
+    }
+    lastOrder.current = tabOrder;
+    positions.current = next;
+    if (!moved.length) return;
+    // 移動前の位置を確定させてから CSS のトランジションを戻す。
+    void bar?.offsetWidth;
+    for (const tab of moved) {
+      tab.style.removeProperty("transition");
+      tab.style.removeProperty("translate");
+    }
+  }, [tabOrder, pane.active]);
 
   if (!pane.tabs.length) return null;
 
   return (
-    <div className={`tabbar ${dropAt !== null ? "drop-target" : ""}`} role="tablist">
+    <div className={`tabbar ${dropAt !== null ? "drop-target" : ""}`} ref={barRef} role="tablist">
       {pane.tabs.map((t, i) => {
         const dirty = isDirty(t);
         return (
           <div
             key={t.id}
+            data-tab-id={t.id}
             role="tab"
             aria-selected={i === pane.active}
             className={`tab ${i === pane.active ? "on" : ""} ${draggingId === t.id ? "dragging" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
@@ -53,8 +87,10 @@ export default function TabBar({ paneId, pane, onActivate, onClose, onContextMen
           >
             {t.kind === "doc" ? <TreeIcon def={fileIcon(tabTitle(t))} /> : <GitCompare size={14} className="tree-icon" />}
             <span className="tab-name">{tabTitle(t)}</span>
+            {dirty && <span className="tab-dirty" aria-label="未保存の変更">●</span>}
             <button
-              className={`tab-close ${dirty ? "dirty" : ""}`}
+              className="tab-close"
+              aria-label="閉じる"
               title={dirty ? "未保存の変更があります（閉じる ⌘W）" : "閉じる (⌘W)"}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -62,8 +98,7 @@ export default function TabBar({ paneId, pane, onActivate, onClose, onContextMen
                 onClose(i);
               }}
             >
-              <span className="dot">●</span>
-              <span className="x">×</span>
+              ×
             </button>
           </div>
         );

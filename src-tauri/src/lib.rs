@@ -349,9 +349,21 @@ fn watch_files(app: AppHandle, window: WebviewWindow, state: State<WatchState>, 
 
 /// 開いているフォルダの git の状態。リポジトリでない・git が無いときは null。
 /// 大きなリポジトリでも画面を止めないよう、別スレッドで実行する。
+#[derive(serde::Serialize)]
+struct GitStatus {
+    branch: String,
+    entries: Vec<git::GitEntry>,
+}
+
 #[tauri::command]
-async fn git_status(root: String) -> Result<Option<Vec<git::GitEntry>>, String> {
-    tauri::async_runtime::spawn_blocking(move || git::status(&root)).await.map_err(|e| e.to_string())
+async fn git_status(root: String, include_entries: bool) -> Result<Option<GitStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let branch = git::branch(&root)?;
+        let entries = if include_entries { git::status(&root).unwrap_or_default() } else { Vec::new() };
+        Some(GitStatus { branch, entries })
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // ---- 複数ウィンドウ ----

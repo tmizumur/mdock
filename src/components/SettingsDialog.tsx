@@ -6,12 +6,10 @@ import {
   EDITOR_FONT_LABEL,
   FONT_MAX,
   FONT_MIN,
-  THEME_LABEL,
   WIDTH_LABEL,
   useSettings,
   type EditorFont,
   type Settings,
-  type ThemePref,
   type DocWidth,
 } from "../lib/settings";
 import { checkForUpdateNow } from "./UpdateButton";
@@ -63,7 +61,7 @@ function Check({ id, k, label, note }: { id: string; k: keyof Settings; label: s
   const { settings, update } = useSettings();
   return (
     <Row label={label} note={note} htmlFor={id}>
-      <input id={id} type="checkbox" checked={settings[k] as boolean} onChange={(e) => update({ [k]: e.target.checked })} />
+      <input id={id} type="checkbox" role="switch" checked={settings[k] as boolean} onChange={(e) => update({ [k]: e.target.checked })} />
     </Row>
   );
 }
@@ -108,9 +106,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="settings-body">
           <section className="settings-section">
             <h3>表示</h3>
-            <Row label="テーマ" note="自動は macOS の外観に合わせます">
-              <Segmented<ThemePref> value={settings.theme} labels={THEME_LABEL} onChange={(theme) => update({ theme })} />
-            </Row>
+            <Check id="set-animations" k="animations" label="アニメーション" note="画面の切り替えやボタンの動きを表示します" />
             <Row label="文字サイズ" note="⌘+ / ⌘− / ⌘0 でも変えられます">
               <div className="segmented">
                 <button onClick={() => update((s) => ({ fontSize: s.fontSize - 1 }))} disabled={settings.fontSize <= FONT_MIN} aria-label="小さく">

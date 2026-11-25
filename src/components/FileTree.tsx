@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beginDrag } from "../lib/dnd";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { ChevronRight } from "lucide-react";
 import { Entry, copyText, createEntry, dirname, isMarkdown, norm, renameEntry, trashEntry } from "../lib/api";
 import { TreeIcon, fileIcon, folderIcon } from "../lib/fileIcons";
 import { ContextMenu, type MenuItem } from "./Dialogs";
@@ -37,7 +38,7 @@ type Row =
   | { kind: "entry"; entry: Entry; depth: number; parent: string }
   | { kind: "create"; dir: string; isDir: boolean; depth: number };
 
-const ROW_H = 26;
+const ROW_H = 28;
 
 /**
  * ファイルツリー。展開している行を平らなリストにして、見えている行だけ描く（1万ファイルでも軽い）。
@@ -74,6 +75,10 @@ export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onC
 
   const virt = useVirtualizer({
     count: rows.length,
+    getItemKey: (i) => {
+      const row = rows[i];
+      return row.kind === "create" ? `create:${row.dir}` : row.entry.path;
+    },
     getScrollElement: () => scroller.current,
     estimateSize: () => ROW_H,
     overscan: 12,
@@ -315,7 +320,7 @@ const Row = memo(function Row({
         onClick={onClick}
         onContextMenu={onContextMenu}
       >
-        <span className="chev">{expanded ? "▾" : "▸"}</span>
+        <ChevronRight className="chev" size={10} aria-hidden="true" />
         <TreeIcon def={folderIcon(entry.name, expanded)} />
         <span className="tree-name">{entry.name}</span>
         {gitEnd}

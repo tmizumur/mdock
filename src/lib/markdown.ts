@@ -3,7 +3,6 @@ import anchor from "markdown-it-anchor";
 import type { HighlighterGeneric } from "shiki";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath, safeDecode } from "./api";
-import { isDarkTheme } from "./theme";
 
 /** よく使う言語だけ先に読み込む。それ以外はプレーン表示。 */
 const LANGS = [
@@ -18,9 +17,25 @@ let loading: Promise<HighlighterGeneric<string, string>> | null = null;
 /** Shiki は起動を遅くしないよう、コードブロックが見えたときに初めて読み込む */
 export function loadHighlighter(): Promise<HighlighterGeneric<string, string>> {
   if (!loading) {
-    loading = import("shiki").then(async ({ createHighlighter }) => {
+    loading = import("shiki").then(async ({ createHighlighter, bundledThemes }) => {
+      const { default: dark } = await bundledThemes["github-dark"]();
       highlighter = (await createHighlighter({
-        themes: ["github-light", "github-dark"],
+        themes: [{
+          ...dark,
+          name: "mdock-dark",
+          colors: { ...dark.colors, "editor.background": "#15161A", "editor.foreground": "#E7E8EB" },
+          tokenColors: dark.tokenColors?.map((rule) => ({
+            ...rule,
+            settings: {
+              ...rule.settings,
+              foreground: ({
+                "#F97583": "#C3A6FF",
+                "#B392F0": "#8AA4FF",
+                "#9ECBFF": "#9FD8A8",
+              } as Record<string, string>)[rule.settings.foreground?.toUpperCase() ?? ""] ?? rule.settings.foreground,
+            },
+          })),
+        }],
         langs: LANGS,
       })) as HighlighterGeneric<string, string>;
       return highlighter;
@@ -52,9 +67,7 @@ class Cache {
 const hlCache = new Cache(3000);
 const mermaidCache = new Cache(300);
 
-const isDark = isDarkTheme;
 const hlKey = (lang: string, code: string) => `${lang}\u0000${code}`;
-const mermaidKey = (code: string) => `${isDark() ? "d" : "l"}\u0000${code}`;
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -94,10 +107,9 @@ md.renderer.rules.fence = (tokens, idx) => {
   const code = token.content;
   const line = token.map ? ` data-line="${token.map[0]}"` : "";
   if (lang === "mermaid") {
-    const svg = mermaidCache.get(mermaidKey(code));
+    const svg = mermaidCache.get(code);
     if (svg) return `<div class="mermaid-block" data-processed="1"${line}>${svg}</div>`;
-    // 配色を入れておく（テーマを切り替えたとき、同じ HTML とみなされて描き直されないのを防ぐ）
-    return `<div class="mermaid-block" data-theme="${isDark() ? "dark" : "light"}"${line}><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
+    return `<div class="mermaid-block"${line}><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
   }
   // （```math は KaTeX プラグインが先に処理する）
   const cached = lang ? hlCache.get(hlKey(lang, code)) : undefined;
@@ -175,15 +187,13 @@ export async function highlightBlock(pre: HTMLElement): Promise<void> {
   const key = hlKey(lang, code);
   let html = hlCache.get(key);
   if (!html) {
-    html = hl.codeToHtml(code, { lang, themes: { light: "github-light", dark: "github-dark" }, defaultColor: false });
+    html = hl.codeToHtml(code, { lang, theme: "mdock-dark" });
     hlCache.set(key, html);
   }
   if (pre.isConnected) pre.outerHTML = html;
 }
 
 let mermaidLoaded: Promise<typeof import("mermaid").default> | null = null;
-/** いま Mermaid に設定している配色（テーマを切り替えたら設定し直す） */
-let mermaidTheme = "";
 let mermaidSeq = 0;
 
 /** Mermaid 図を描画する（初めて図が見えたときにライブラリを読み込む） */
@@ -194,21 +204,22 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
   if (!pre) return;
   const code = pre.textContent ?? "";
   if (!mermaidLoaded) {
-    mermaidLoaded = import("mermaid").then((m) => m.default);
+    mermaidLoaded = import("mermaid").then(({ default: mermaid }) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "dark",
+        secure: [...(mermaid.mermaidAPI.defaultConfig.secure ?? []), "theme", "themeVariables", "themeCSS"],
+      });
+      return mermaid;
+    });
   }
   const mermaid = await mermaidLoaded;
-  const theme = isDark() ? "dark" : "default";
-  if (mermaidTheme !== theme) {
-    mermaid.initialize({ startOnLoad: false, theme });
-    mermaidTheme = theme;
-  }
-  const key = mermaidKey(code);
   const id = `mermaid-${++mermaidSeq}`;
   try {
-    let svg = mermaidCache.get(key);
+    let svg = mermaidCache.get(code);
     if (!svg) {
       svg = (await mermaid.render(id, code)).svg;
-      mermaidCache.set(key, svg);
+      mermaidCache.set(code, svg);
     }
     if (block.isConnected) block.innerHTML = svg;
   } catch (e) {
