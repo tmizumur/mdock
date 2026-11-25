@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { OutlineHeading } from "./Outline";
 
-export type Heading = { level: number; text: string; top: number; el: HTMLElement };
+export type Heading = OutlineHeading & { top: number };
 
 /**
  * プレビューの見出し一覧と、今読んでいる見出しを追う。
  * version が変わったとき（描き直し・画像の読み込み）と、大きさが変わったときに位置を測り直す。
  */
-export function useOutline(scroller: React.RefObject<HTMLDivElement | null>, version: number, enabled: boolean) {
+export function useOutline(scroller: React.RefObject<HTMLDivElement | null>, version: number) {
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [metrics, setMetrics] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });
   const raf = useRef(0);
@@ -21,7 +22,6 @@ export function useOutline(scroller: React.RefObject<HTMLDivElement | null>, ver
         level: Number(el.tagName[1]),
         text: el.textContent?.trim() ?? "",
         top: el.getBoundingClientRect().top - base,
-        el,
       }));
       setHeadings(hs);
       setMetrics({ scrollTop: sc.scrollTop, scrollHeight: Math.max(1, sc.scrollHeight), clientHeight: sc.clientHeight });
@@ -29,16 +29,9 @@ export function useOutline(scroller: React.RefObject<HTMLDivElement | null>, ver
   }, [scroller]);
 
   useEffect(() => {
-    if (!enabled) {
-      setHeadings([]);
-      return;
-    }
-    measure();
-  }, [version, enabled, measure]);
-
-  useEffect(() => {
     const sc = scroller.current;
-    if (!sc || !enabled) return;
+    if (!sc) return;
+    measure();
     const onScroll = () =>
       setMetrics({ scrollTop: sc.scrollTop, scrollHeight: Math.max(1, sc.scrollHeight), clientHeight: sc.clientHeight });
     sc.addEventListener("scroll", onScroll, { passive: true });
@@ -49,27 +42,17 @@ export function useOutline(scroller: React.RefObject<HTMLDivElement | null>, ver
     return () => {
       sc.removeEventListener("scroll", onScroll);
       ro.disconnect();
+      cancelAnimationFrame(raf.current);
     };
-  }, [scroller, enabled, measure, version]);
+  }, [scroller, measure, version]);
 
-  // 今いる見出し: 画面の上端より上にある最後の見出し。その親の見出しもたどってパンくずにする
-  // 一番下までスクロールしたときは、最後の見出しを今いる場所とみなす
+  // 画面上端までに通過した見出しを使う。末尾では、上端まで届かない最後の見出しも拾う。
   const atBottom = metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - 2 && metrics.scrollTop > 0;
   const line = atBottom ? metrics.scrollHeight : metrics.scrollTop + 12;
-  let cur = -1;
-  for (let i = 0; i < headings.length && headings[i].top <= line; i++) cur = i;
-  const trail: Heading[] = [];
-  if (cur >= 0) {
-    let level = 7;
-    for (let i = cur; i >= 0; i--) {
-      if (headings[i].level < level) {
-        trail.unshift(headings[i]);
-        level = headings[i].level;
-        if (level === 1) break;
-      }
-    }
-  }
-  return { headings, metrics, trail };
+  let current = -1;
+  for (let i = 0; i < headings.length && headings[i].top <= line; i++) current = i;
+  if (current < 0 && headings[0]?.top < metrics.clientHeight) current = 0;
+  return { headings, metrics, current };
 }
 
 type Props = {
@@ -134,6 +117,7 @@ export default function OverviewRuler({ headings, metrics, marks, onScrollTo }: 
         dragging.current = false;
         e.currentTarget.releasePointerCapture(e.pointerId);
       }}
+      onLostPointerCapture={() => { dragging.current = false; }}
       onPointerLeave={() => setHover(null)}
       aria-hidden
     >
@@ -143,7 +127,7 @@ export default function OverviewRuler({ headings, metrics, marks, onScrollTo }: 
       ))}
       <div
         className="ruler-view"
-        style={{ top: pct(scrollTop), height: `max(10px, ${(clientHeight / scrollHeight) * 100}%)` }}
+        style={{ top: `min(calc(100% - 4px), ${pct(scrollTop)})`, height: `max(4px, ${pct(Math.min(scrollHeight, clientHeight))})` }}
       />
       {hover && (
         <div className="ruler-tip" style={{ top: hover.y }}>

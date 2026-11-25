@@ -13,6 +13,11 @@
     "windows": [
       {
         "title": "Mdock",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 15 },
+        "theme": "Dark",
+        "backgroundColor": "#0F1012",
         "width": 1280,
         "height": 820,
         "minWidth": 640,

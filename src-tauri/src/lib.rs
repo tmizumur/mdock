@@ -349,9 +349,40 @@ fn watch_files(app: AppHandle, window: WebviewWindow, state: State<WatchState>, 
 
 /// 開いているフォルダの git の状態。リポジトリでない・git が無いときは null。
 /// 大きなリポジトリでも画面を止めないよう、別スレッドで実行する。
+#[derive(serde::Serialize)]
+struct GitStatus {
+    branch: String,
+    entries: Vec<git::GitEntry>,
+    modified: usize,
+    added: usize,
+}
+
 #[tauri::command]
-async fn git_status(root: String) -> Result<Option<Vec<git::GitEntry>>, String> {
-    tauri::async_runtime::spawn_blocking(move || git::status(&root)).await.map_err(|e| e.to_string())
+async fn git_status(root: String, include_entries: bool, include_counts: bool) -> Result<Option<GitStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let branch = git::branch(&root)?;
+        let (mut entries, mut modified) = if include_entries || include_counts {
+            git::status(&root, include_entries, include_counts).unwrap_or_default()
+        } else {
+            (Vec::new(), 0)
+        };
+        let mut added = 0;
+        if include_counts {
+            for entry in &entries {
+                match entry.mark {
+                    git::Mark::M | git::Mark::C => modified += 1,
+                    git::Mark::A | git::Mark::U => added += 1,
+                    git::Mark::I => {}
+                }
+            }
+        }
+        if !include_entries {
+            entries.clear();
+        }
+        Some(GitStatus { branch, entries, modified, added })
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // ---- 複数ウィンドウ ----

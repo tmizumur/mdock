@@ -72,10 +72,10 @@ export default function UpdateButton({ beforeRestart }: Props) {
       if (progress === null && !box.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && progress === null && setOpen(false);
-    window.addEventListener("mousedown", onDown);
+    window.addEventListener("mousedown", onDown, true);
     window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
   }, [open, progress]);
@@ -118,7 +118,7 @@ export default function UpdateButton({ beforeRestart }: Props) {
         {progress !== null ? `更新中… ${progress}%` : `v${update.version} に更新`}
       </button>
       {open && (
-        <div className="popover update-pop" role="dialog" aria-label="アップデート">
+        <div className="popover dialog-surface update-pop" role="dialog" aria-label="アップデート">
           <div className="update-head">
             <strong>v{update.version}</strong>
             <span className="menu-label">

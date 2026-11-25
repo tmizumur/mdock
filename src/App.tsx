@@ -1,15 +1,15 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { Group, Layout, Panel, Separator } from "react-resizable-panels";
+import { Group, Layout, Panel, Separator, type PanelImperativeHandle } from "react-resizable-panels";
 import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Columns2, Columns3, Rows2, Settings as SettingsIcon, Square } from "lucide-react";
-import FileTree from "./components/FileTree";
-import UpdateButton from "./components/UpdateButton";
-import Pane, { PaneCommand } from "./components/Pane";
-import ViewMenu from "./components/ViewMenu";
+import FileTree, { ExplorerControls } from "./components/FileTree";
+import Pane, { type PaneCommand, type PaneOutline } from "./components/Pane";
+import Outline from "./components/Outline";
+import StatusBar from "./components/StatusBar";
+import WindowBar from "./components/WindowBar";
 import SettingsDialog from "./components/SettingsDialog";
 import { useGitStatus } from "./lib/git";
 import { ContextMenu, type MenuItem, useUnsavedDialog } from "./components/Dialogs";
@@ -48,13 +48,6 @@ async function restoreSession(): Promise<Session> {
   }
   return defaultSession();
 }
-
-const LAYOUTS: [PresetLayout, string, typeof Square][] = [
-  ["single", "1画面", Square],
-  ["cols2", "左右に2分割", Columns2],
-  ["rows2", "上下に2分割", Rows2],
-  ["cols3", "左右に3分割", Columns3],
-];
 
 /** ペインの集まりと、その並べ方（分割ツリー） */
 type Workspace = { panes: Record<string, PaneState>; layout: LayoutNode };
@@ -119,10 +112,22 @@ export default function App() {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const { settings, update: updateSettings } = useSettings();
   const mdOnly = settings.mdOnly;
-  const git = useGitStatus(root, settings.gitStatus);
+  const git = useGitStatus(root, settings.gitStatus, settings.statusBar);
+  const [outline, setOutline] = useState<PaneOutline>();
+  const [watchedRoot, setWatchedRoot] = useState<string | null>(null);
+  const [watchedFiles, setWatchedFiles] = useState("");
+  const watchRequest = useRef(0);
+  const startWatchingFolder = useCallback(async (dir: string) => {
+    const request = ++watchRequest.current;
+    setWatchedRoot(null);
+    await watchFolder(dir);
+    if (request === watchRequest.current) setWatchedRoot(dir);
+  }, []);
   const { ask, dialog } = useUnsavedDialog();
   /** サイドバーとペイン全体の幅 */
   const sidebarLayout = useRef<Session["sidebar"]>(undefined);
+  const sidebarPanel = useRef<PanelImperativeHandle>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   /** タブごとのスクロール位置（タブ ID → px） */
   const scrolls = useRef(new Map<string, number>());
 
@@ -145,7 +150,6 @@ export default function App() {
   hiddenRef.current = settings.showHidden;
 
   const order = leaves(ws.layout);
-  const paneCount = order.length;
 
   const updatePane = (id: string, fn: (p: PaneState) => PaneState) =>
     apply((w) => (w.panes[id] ? { ...w, panes: { ...w.panes, [id]: fn(w.panes[id]) } } : w));
@@ -230,19 +234,6 @@ export default function App() {
     [focusPane],
   );
 
-  /** フォルダを開く（ツリー読み込み + 監視開始） */
-  const openFolder = useCallback(async (dir: string) => {
-    try {
-      const entries = await readTree(dir, hiddenRef.current);
-      setRoot(dir);
-      setTree(entries);
-      await watchFolder(dir);
-      setError(null);
-    } catch (e) {
-      setError(`フォルダを開けませんでした: ${e}`);
-    }
-  }, []);
-
   /** 未保存のタブがあれば確認する。true なら続けてよい */
   const confirmDirty = useCallback(
     async (tabs: Tab[]): Promise<boolean> => {
@@ -263,17 +254,31 @@ export default function App() {
   );
 
   /** すべてのタブを閉じる（分割の形はそのまま） */
-  const clearTabs = () => {
+  const clearTabs = useCallback(() => {
     apply((w) => mapPanes(w, () => emptyPane()));
     scrolls.current.clear();
-  };
+  }, [apply]);
+
+  /** フォルダのツリーを読み込み、監視を開始する */
+  const openFolder = useCallback(async (dir: string, replaceTabs = false) => {
+    try {
+      const entries = await readTree(dir, hiddenRef.current);
+      if (replaceTabs) {
+        if (!(await confirmDirty(allTabs(wsRef.current)))) return;
+        clearTabs();
+      }
+      setRoot(dir);
+      setTree(entries);
+      await startWatchingFolder(dir);
+      setError(null);
+    } catch (e) {
+      setError(`フォルダを開けませんでした: ${e}`);
+    }
+  }, [clearTabs, confirmDirty, setTree, startWatchingFolder]);
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false });
-    if (typeof dir !== "string") return;
-    if (!(await confirmDirty(allTabs(wsRef.current)))) return;
-    clearTabs();
-    openFolder(dir);
+    if (typeof dir === "string") await openFolder(dir, true);
   };
 
   /** タブを保存する。同じファイルを開いているほかのタブ（未編集のもの）にも反映する */
@@ -513,7 +518,7 @@ export default function App() {
         try {
           setTree(await readTree(s.root, hiddenRef.current));
           setRoot(s.root);
-          watchFolder(s.root).catch(() => {});
+          startWatchingFolder(s.root).catch(() => {});
         } catch {
           /* フォルダが消えていた場合は何も開かない */
         }
@@ -803,7 +808,12 @@ export default function App() {
   const watchKey = filesOf(ws).sort().join("\n");
   useEffect(() => {
     if (!ready) return;
-    watchFiles(watchKey ? watchKey.split("\n") : []).catch(() => {});
+    let current = true;
+    watchFiles(watchKey ? watchKey.split("\n") : []).then(
+      () => { if (current) setWatchedFiles(watchKey); },
+      () => { if (current) setWatchedFiles(""); },
+    );
+    return () => { current = false; };
   }, [watchKey, ready, root]);
 
   // 取りこぼし対策: ウィンドウに戻ってきたら、開いているファイル（更新時刻とサイズ）とツリーを確かめ直す
@@ -854,14 +864,12 @@ export default function App() {
         openFile(p, activeRef.current, { newTab: true });
         return;
       }
-      if (!(await confirmDirty(allTabs(wsRef.current)))) return;
-      clearTabs();
-      openFolder(p);
+      openFolder(p, true);
     });
     return () => {
       un.then((f) => f());
     };
-  }, [openFolder, openFile, confirmDirty]);
+  }, [openFolder, openFile]);
 
   const refreshTree = useCallback(() => {
     const r = rootRef.current;
@@ -1042,7 +1050,8 @@ export default function App() {
       key={i}
       idx={i}
       pane={ws.panes[i] ?? emptyPane()}
-      active={paneCount > 1 && activeIdx === i}
+      active={activeIdx === i}
+      onOutline={setOutline}
       rootDir={root}
       command={commands[i]}
       scrollOf={(id) => scrolls.current.get(id) ?? 0}
@@ -1072,6 +1081,10 @@ export default function App() {
       printTarget={activeIdx === i}
     />
   );
+
+  const currentTab = ws.panes[activeIdx] ? activeTab(ws.panes[activeIdx]) : undefined;
+  const activeOutline = currentTab?.kind === "doc" && outline?.paneId === activeIdx &&
+    outline.tabId === currentTab.id && outline.mode === currentTab.mode ? outline.outline : undefined;
 
   const visiblePaths = order
     .map((id) => ws.panes[id] && activeTab(ws.panes[id]))
@@ -1113,33 +1126,24 @@ export default function App() {
 
   return (
     <div className="app" style={{ "--doc-font-size": `${settings.fontSize}px` } as React.CSSProperties}>
-      <header className="toolbar">
-        <button className="btn" onClick={pickFolder} title="フォルダを開く (⌘O)">
-          フォルダを開く
-        </button>
-        <span className="root-name" title={root ?? ""}>
-          {root ? norm(root).split("/").pop() : ""}
-        </span>
-        <span className="spacer" />
-        {error && <span className="error">{error}</span>}
-        <UpdateButton beforeRestart={flush} />
-        <ViewMenu />
-        <button className="btn icon-only" onClick={() => setSettingsOpen(true)} title="設定 (⌘,)" aria-label="設定">
-          <SettingsIcon size={15} />
-        </button>
-        <div className="segmented icons" role="group" aria-label="レイアウトのリセット">
-          {LAYOUTS.map(([l, label, Icon]) => (
-            <button
-              key={l}
-              onClick={() => resetLayout(l)}
-              title={`レイアウトをリセット: ${label}\n（タブやファイルをペインの端にドラッグすると、自由に分割できます。⌘\\ で右に分割）`}
-              aria-label={`レイアウトをリセット: ${label}`}
-            >
-              <Icon size={15} />
-            </button>
-          ))}
-        </div>
-      </header>
+      <WindowBar
+        root={root}
+        branch={git.branch}
+        error={error}
+        layout={ws.layout}
+        sidebarOpen={sidebarOpen}
+        ready={ready}
+        onToggleSidebar={() => {
+          const panel = sidebarPanel.current;
+          if (panel?.isCollapsed()) panel.expand();
+          else panel?.collapse();
+        }}
+        onPickFolder={pickFolder}
+        onOpenFolder={(dir) => openFolder(dir, true)}
+        onLayout={resetLayout}
+        onSettings={() => setSettingsOpen(true)}
+        beforeRestart={flush}
+      />
 
       {ready && (
         <Group
@@ -1151,33 +1155,33 @@ export default function App() {
             schedulePersist();
           }}
         >
-          <Panel id="sidebar" defaultSize="22" minSize={160} collapsible>
+          <Panel id="sidebar" defaultSize={264} minSize={248} maxSize={280} groupResizeBehavior="preserve-pixel-size" collapsible panelRef={sidebarPanel}
+            onResize={(size) => setSidebarOpen(size.asPercentage > 0)}>
             <aside className="sidebar">
-              <div className="sidebar-head">
-                <span>ファイル</span>
-                <label title="Markdown ファイルだけを表示">
-                  <input type="checkbox" checked={mdOnly} onChange={(e) => updateSettings({ mdOnly: e.target.checked })} /> .md のみ
-                </label>
-              </div>
               {root ? (
                 <FileTree
                   key={root}
                   root={root}
                   entries={tree}
                   mdOnly={mdOnly}
+                  onFilter={(mdOnly) => updateSettings({ mdOnly })}
                   openPaths={visiblePaths}
                   onOpen={onTreeOpen}
                   onChanged={refreshTree}
                   onRenamed={onRenamed}
                   onError={setError}
-                  git={git}
+                  git={git.lookup}
                 />
               ) : (
-                <div className="tree-empty">
-                  <button className="btn" onClick={pickFolder}>フォルダを開く</button>
-                  <small>ここにフォルダをドロップしても開けます</small>
-                </div>
+                <>
+                  <ExplorerControls mdOnly={mdOnly} onFilter={(mdOnly) => updateSettings({ mdOnly })} />
+                  <div className="tree-empty">
+                    <button className="btn" onClick={pickFolder}>フォルダを開く</button>
+                    <small>ここにフォルダをドロップしても開けます</small>
+                  </div>
+                </>
               )}
+              <Outline outline={activeOutline} />
             </aside>
           </Panel>
           <Separator className="sep" />
@@ -1185,6 +1189,16 @@ export default function App() {
             {renderNode(ws.layout)}
           </Panel>
         </Group>
+      )}
+      {settings.statusBar && (
+        <StatusBar
+          live={root ? watchedRoot === root : !!watchKey && watchedFiles === watchKey}
+          branch={git.branch}
+          modified={git.modified}
+          added={git.added}
+          tab={currentTab}
+          fontSize={settings.fontSize}
+        />
       )}
       <DragGhost />
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}

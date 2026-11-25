@@ -23,7 +23,9 @@
     "core:window:allow-destroy",
     "core:window:allow-close",
     "core:window:allow-set-title",
-    "core:window:allow-set-theme",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-internal-toggle-maximize",
     "opener:allow-reveal-item-in-dir"
   ]
 }
