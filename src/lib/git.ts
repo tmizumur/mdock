@@ -8,8 +8,8 @@ import { norm } from "./api";
 export type GitMark = "M" | "A" | "U" | "C" | "I";
 type GitEntry = { path: string; mark: GitMark; dir: boolean };
 
-type GitStatus = { branch: string; entries: GitEntry[] };
-const gitStatus = (root: string, includeEntries: boolean) => invoke<GitStatus | null>("git_status", { root, includeEntries });
+type GitStatus = { branch: string; entries: GitEntry[]; modified: number; added: number };
+const gitStatus = (root: string, includeEntries: boolean, includeCounts: boolean) => invoke<GitStatus | null>("git_status", { root, includeEntries, includeCounts });
 
 /** フォルダに付ける色の強さ（中に複数の状態があるときは強いほう） */
 const RANK: Record<GitMark, number> = { I: 0, U: 1, A: 2, M: 3, C: 4 };
@@ -60,7 +60,7 @@ function buildLookup(root: string, list: GitEntry[]): GitLookup {
  * 開いているフォルダの git の状態。ファイルの変更（.git の中の変更＝コミットやステージも含む）のたびに、
  * すぐ（80ms ほどまとめてから）読み直す。読み直している間に変更があれば、終わってからもう一度読む。
  */
-export function useGitStatus(root: string | null, enabled: boolean) {
+export function useGitStatus(root: string | null, enabled: boolean, counts: boolean) {
   const [status, setStatus] = useState<(GitStatus & { root: string }) | null>(null);
 
   useEffect(() => {
@@ -76,11 +76,11 @@ export function useGitStatus(root: string | null, enabled: boolean) {
       }
       running = true;
       try {
-        const status = await gitStatus(root, enabled);
+        const status = await gitStatus(root, enabled, counts);
         // 前と同じ結果なら置き換えない（ツリーを描き直さない）
         if (alive)
           setStatus((prev) =>
-            status && prev?.root === root && prev.branch === status.branch && JSON.stringify(prev.entries) === JSON.stringify(status.entries)
+            status && prev?.root === root && prev.branch === status.branch && prev.modified === status.modified && prev.added === status.added && JSON.stringify(prev.entries) === JSON.stringify(status.entries)
               ? prev
               : status && { root, ...status },
           );
@@ -106,10 +106,12 @@ export function useGitStatus(root: string | null, enabled: boolean) {
       window.clearTimeout(timer);
       uns.forEach((u) => u.then((f) => f()));
     };
-  }, [root, enabled]);
+  }, [root, enabled, counts]);
 
   return useMemo(() => ({
     branch: status?.root === root ? status.branch : null,
+    modified: status?.root === root ? status.modified : 0,
+    added: status?.root === root ? status.added : 0,
     lookup: enabled && status?.root === root ? buildLookup(status.root, status.entries) : EMPTY,
   }), [status, root, enabled]);
 }

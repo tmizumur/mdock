@@ -106,6 +106,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="settings-body">
           <section className="settings-section">
             <h3>表示</h3>
+            <Check id="set-status-bar" k="statusBar" label="ステータスバー" note="ウィンドウ下部にファイルと Git の情報を表示します" />
             <Check id="set-animations" k="animations" label="アニメーション" note="画面の切り替えやボタンの動きを表示します" />
             <Row label="文字サイズ" note="⌘+ / ⌘− / ⌘0 でも変えられます">
               <div className="segmented">
@@ -140,8 +141,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
             <Check
               id="set-git"
               k="gitStatus"
-              label="git の変更状態を表示"
-              note="変更 M・新規 A・未追跡 U・競合 ! を色と記号で。.gitignore で無視されたものは薄く"
+              label="ツリーに git の変更状態を表示"
+              note="変更 M・新規と未追跡 U・競合 ! を色と記号で。.gitignore で無視されたものは薄く"
             />
           </section>
 

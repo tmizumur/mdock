@@ -353,14 +353,34 @@ fn watch_files(app: AppHandle, window: WebviewWindow, state: State<WatchState>, 
 struct GitStatus {
     branch: String,
     entries: Vec<git::GitEntry>,
+    modified: usize,
+    added: usize,
 }
 
 #[tauri::command]
-async fn git_status(root: String, include_entries: bool) -> Result<Option<GitStatus>, String> {
+async fn git_status(root: String, include_entries: bool, include_counts: bool) -> Result<Option<GitStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let branch = git::branch(&root)?;
-        let entries = if include_entries { git::status(&root).unwrap_or_default() } else { Vec::new() };
-        Some(GitStatus { branch, entries })
+        let mut entries = if include_entries || include_counts {
+            git::status(&root, include_entries, include_counts).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut modified = 0;
+        let mut added = 0;
+        if include_counts {
+            for entry in &entries {
+                match entry.mark {
+                    git::Mark::M | git::Mark::C => modified += 1,
+                    git::Mark::A | git::Mark::U => added += 1,
+                    git::Mark::I => {}
+                }
+            }
+        }
+        if !include_entries {
+            entries.clear();
+        }
+        Some(GitStatus { branch, entries, modified, added })
     })
     .await
     .map_err(|e| e.to_string())

@@ -5,8 +5,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import FileTree from "./components/FileTree";
-import Pane, { PaneCommand } from "./components/Pane";
+import FileTree, { ExplorerControls } from "./components/FileTree";
+import Pane, { type PaneCommand, type PaneOutline } from "./components/Pane";
+import Outline from "./components/Outline";
+import StatusBar from "./components/StatusBar";
 import WindowBar from "./components/WindowBar";
 import SettingsDialog from "./components/SettingsDialog";
 import { useGitStatus } from "./lib/git";
@@ -110,7 +112,17 @@ export default function App() {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const { settings, update: updateSettings } = useSettings();
   const mdOnly = settings.mdOnly;
-  const git = useGitStatus(root, settings.gitStatus);
+  const git = useGitStatus(root, settings.gitStatus, settings.statusBar);
+  const [outline, setOutline] = useState<PaneOutline>();
+  const [watchedRoot, setWatchedRoot] = useState<string | null>(null);
+  const [watchedFiles, setWatchedFiles] = useState("");
+  const watchRequest = useRef(0);
+  const startWatchingFolder = useCallback(async (dir: string) => {
+    const request = ++watchRequest.current;
+    setWatchedRoot(null);
+    await watchFolder(dir);
+    if (request === watchRequest.current) setWatchedRoot(dir);
+  }, []);
   const { ask, dialog } = useUnsavedDialog();
   /** サイドバーとペイン全体の幅 */
   const sidebarLayout = useRef<Session["sidebar"]>(undefined);
@@ -138,7 +150,6 @@ export default function App() {
   hiddenRef.current = settings.showHidden;
 
   const order = leaves(ws.layout);
-  const paneCount = order.length;
 
   const updatePane = (id: string, fn: (p: PaneState) => PaneState) =>
     apply((w) => (w.panes[id] ? { ...w, panes: { ...w.panes, [id]: fn(w.panes[id]) } } : w));
@@ -258,12 +269,12 @@ export default function App() {
       }
       setRoot(dir);
       setTree(entries);
-      await watchFolder(dir);
+      await startWatchingFolder(dir);
       setError(null);
     } catch (e) {
       setError(`フォルダを開けませんでした: ${e}`);
     }
-  }, [clearTabs, confirmDirty, setTree]);
+  }, [clearTabs, confirmDirty, setTree, startWatchingFolder]);
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false });
@@ -507,7 +518,7 @@ export default function App() {
         try {
           setTree(await readTree(s.root, hiddenRef.current));
           setRoot(s.root);
-          watchFolder(s.root).catch(() => {});
+          startWatchingFolder(s.root).catch(() => {});
         } catch {
           /* フォルダが消えていた場合は何も開かない */
         }
@@ -797,7 +808,12 @@ export default function App() {
   const watchKey = filesOf(ws).sort().join("\n");
   useEffect(() => {
     if (!ready) return;
-    watchFiles(watchKey ? watchKey.split("\n") : []).catch(() => {});
+    let current = true;
+    watchFiles(watchKey ? watchKey.split("\n") : []).then(
+      () => { if (current) setWatchedFiles(watchKey); },
+      () => { if (current) setWatchedFiles(""); },
+    );
+    return () => { current = false; };
   }, [watchKey, ready, root]);
 
   // 取りこぼし対策: ウィンドウに戻ってきたら、開いているファイル（更新時刻とサイズ）とツリーを確かめ直す
@@ -1034,7 +1050,8 @@ export default function App() {
       key={i}
       idx={i}
       pane={ws.panes[i] ?? emptyPane()}
-      active={paneCount > 1 && activeIdx === i}
+      active={activeIdx === i}
+      onOutline={setOutline}
       rootDir={root}
       command={commands[i]}
       scrollOf={(id) => scrolls.current.get(id) ?? 0}
@@ -1064,6 +1081,10 @@ export default function App() {
       printTarget={activeIdx === i}
     />
   );
+
+  const currentTab = ws.panes[activeIdx] ? activeTab(ws.panes[activeIdx]) : undefined;
+  const activeOutline = currentTab?.kind === "doc" && outline?.paneId === activeIdx &&
+    outline.tabId === currentTab.id && outline.mode === currentTab.mode ? outline.outline : undefined;
 
   const visiblePaths = order
     .map((id) => ws.panes[id] && activeTab(ws.panes[id]))
@@ -1134,21 +1155,16 @@ export default function App() {
             schedulePersist();
           }}
         >
-          <Panel id="sidebar" defaultSize={264} minSize={160} groupResizeBehavior="preserve-pixel-size" collapsible panelRef={sidebarPanel}
+          <Panel id="sidebar" defaultSize={264} minSize={248} maxSize={280} groupResizeBehavior="preserve-pixel-size" collapsible panelRef={sidebarPanel}
             onResize={(size) => setSidebarOpen(size.asPercentage > 0)}>
             <aside className="sidebar">
-              <div className="sidebar-head">
-                <span>ファイル</span>
-                <label title="Markdown ファイルだけを表示">
-                  <input type="checkbox" checked={mdOnly} onChange={(e) => updateSettings({ mdOnly: e.target.checked })} /> .md のみ
-                </label>
-              </div>
               {root ? (
                 <FileTree
                   key={root}
                   root={root}
                   entries={tree}
                   mdOnly={mdOnly}
+                  onFilter={(mdOnly) => updateSettings({ mdOnly })}
                   openPaths={visiblePaths}
                   onOpen={onTreeOpen}
                   onChanged={refreshTree}
@@ -1157,11 +1173,15 @@ export default function App() {
                   git={git.lookup}
                 />
               ) : (
-                <div className="tree-empty">
-                  <button className="btn" onClick={pickFolder}>フォルダを開く</button>
-                  <small>ここにフォルダをドロップしても開けます</small>
-                </div>
+                <>
+                  <ExplorerControls mdOnly={mdOnly} onFilter={(mdOnly) => updateSettings({ mdOnly })} />
+                  <div className="tree-empty">
+                    <button className="btn" onClick={pickFolder}>フォルダを開く</button>
+                    <small>ここにフォルダをドロップしても開けます</small>
+                  </div>
+                </>
               )}
+              <Outline outline={activeOutline} />
             </aside>
           </Panel>
           <Separator className="sep" />
@@ -1169,6 +1189,16 @@ export default function App() {
             {renderNode(ws.layout)}
           </Panel>
         </Group>
+      )}
+      {settings.statusBar && (
+        <StatusBar
+          live={root ? watchedRoot === root : !!watchKey && watchedFiles === watchKey}
+          branch={git.branch}
+          modified={git.modified}
+          added={git.added}
+          tab={currentTab}
+          fontSize={settings.fontSize}
+        />
       )}
       <DragGhost />
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}

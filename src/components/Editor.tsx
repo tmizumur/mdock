@@ -1,10 +1,14 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { EditorView, basicSetup } from "codemirror";
 import { Compartment, EditorState } from "@codemirror/state";
 import { openSearchPanel } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { useSettings } from "../lib/settings";
+import type { markdownHeadings } from "../lib/markdown";
+import { editorTopLine, scrollEditorToLine } from "../lib/scrollSync";
+import type { OutlineState } from "./Outline";
+import OverviewRuler, { type Heading } from "./OverviewRuler";
 
 type Props = {
   value: string;
@@ -12,6 +16,8 @@ type Props = {
   /** 開いたときのスクロール位置 */
   initialScroll?: number;
   onScroll?: (top: number) => void;
+  headings?: ReturnType<typeof markdownHeadings>;
+  onOutline?: (outline: OutlineState) => void;
 };
 
 export type EditorHandle = {
@@ -44,6 +50,7 @@ const JA = EditorState.phrases.of({
 const editorTheme = EditorView.theme({
   "&": { backgroundColor: "var(--bg)", color: "var(--fg)" },
   ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--fg-faint)", borderInlineEnd: "1px solid var(--border-soft)" },
+  ".cm-line": { paddingInline: "40px" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--bg-elev)" },
   ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": { background: "var(--accent-soft)" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--fg)" },
@@ -53,7 +60,7 @@ const editorTheme = EditorView.theme({
 }, { dark: true });
 
 /** CodeMirror 6 の Markdown エディタ */
-const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, initialScroll, onScroll }, handle) {
+const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, initialScroll, onScroll, headings, onOutline }, handle) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -95,6 +102,7 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
     v.scrollDOM.addEventListener("scroll", scrolled, { passive: true });
     return () => {
       v.scrollDOM.removeEventListener("scroll", scrolled);
+      view.current = null;
       v.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,7 +128,70 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
     v.dispatch({ changes: { from: a, to: cur.length - b, insert: value.slice(a, value.length - b) } });
   }, [value]);
 
-  return <div className={`editor font-${settings.editorFont}`} ref={host} />;
+  const [rulerHeadings, setRulerHeadings] = useState<Heading[]>([]);
+  const [metrics, setMetrics] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });
+  const [current, setCurrent] = useState(-1);
+  const jumped = useRef<{ heading: NonNullable<Props["headings"]>[number]; top: number } | undefined>(undefined);
+
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !headings) return;
+    const sc = v.scrollDOM;
+    let frame = 0;
+    const readPosition = () => {
+      const { scrollTop, scrollHeight, clientHeight } = sc;
+      const atBottom = scrollTop > 0 && scrollTop + clientHeight >= scrollHeight - 2;
+      const line = atBottom ? v.state.doc.lines : editorTopLine(v);
+      let index = -1;
+      for (let i = 0; i < headings.length && headings[i].line <= line; i++) index = i;
+      if (jumped.current && Math.abs(jumped.current.top - scrollTop) > 1) jumped.current = undefined;
+      const jumpedIndex = jumped.current ? headings.indexOf(jumped.current.heading) : -1;
+      setCurrent(jumpedIndex < 0 ? index : jumpedIndex);
+      setMetrics({ scrollTop, scrollHeight: Math.max(1, scrollHeight), clientHeight });
+    };
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const doc = v.state.doc;
+        setRulerHeadings(headings.map((h) => ({
+          ...h,
+          top: v.lineBlockAt(doc.line(Math.min(h.line + 1, doc.lines)).from).top,
+        })));
+        readPosition();
+      });
+    };
+    const resize = new ResizeObserver(measure);
+    resize.observe(sc);
+    resize.observe(v.contentDOM);
+    sc.addEventListener("scroll", readPosition, { passive: true });
+    measure();
+    return () => {
+      sc.removeEventListener("scroll", readPosition);
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+    };
+  }, [headings]);
+
+  const jump = useCallback((i: number) => {
+    const v = view.current;
+    if (!v || !headings) return;
+    scrollEditorToLine(v, headings[i].line);
+    jumped.current = { heading: headings[i], top: v.scrollDOM.scrollTop };
+    setCurrent(i);
+  }, [headings]);
+  useEffect(() => {
+    if (headings && onOutline) onOutline({ headings, current, jump });
+  }, [headings, current, jump, onOutline]);
+
+  return (
+    <div className="editor-layout">
+      <div className={`editor font-${settings.editorFont}`} ref={host} />
+      {headings && <OverviewRuler headings={rulerHeadings} metrics={metrics} onScrollTo={(top) => {
+        const sc = view.current?.scrollDOM;
+        if (sc) sc.scrollTop = top;
+      }} />}
+    </div>
+  );
 });
 
 export default Editor;

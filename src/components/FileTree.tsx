@@ -1,8 +1,8 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { beginDrag } from "../lib/dnd";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, FilePlus, FolderPlus } from "lucide-react";
 import { Entry, copyText, createEntry, dirname, isMarkdown, norm, renameEntry, trashEntry } from "../lib/api";
 import { TreeIcon, fileIcon, folderIcon } from "../lib/fileIcons";
 import { ContextMenu, type MenuItem } from "./Dialogs";
@@ -12,6 +12,7 @@ type Props = {
   root: string;
   entries: Entry[];
   mdOnly: boolean;
+  onFilter: (mdOnly: boolean) => void;
   openPaths: string[];
   onOpen: (path: string, otherPane: boolean, newTab: boolean) => void;
   /** ファイルを作った・消したなど、ツリーを読み直してほしいとき */
@@ -40,12 +41,41 @@ type Row =
 
 const ROW_H = 28;
 
+export function ExplorerControls({ mdOnly, onFilter, onCreate, onCollapse }: Pick<Props, "mdOnly" | "onFilter"> & {
+  onCreate?: (isDir: boolean) => void;
+  onCollapse?: () => void;
+}) {
+  return (
+    <>
+      <div className="sidebar-head">
+        <span className="sidebar-label">エクスプローラー</span>
+        <div className="explorer-actions">
+          <button className="icon-btn" title="新規ファイル" aria-label="新規ファイル" disabled={!onCreate} onClick={() => onCreate?.(false)}>
+            <FilePlus size={15} />
+          </button>
+          <button className="icon-btn" title="新規フォルダ" aria-label="新規フォルダ" disabled={!onCreate} onClick={() => onCreate?.(true)}>
+            <FolderPlus size={15} />
+          </button>
+          <button className="icon-btn" title="フォルダをすべて閉じる" aria-label="フォルダをすべて閉じる" disabled={!onCollapse} onClick={onCollapse}>
+            <ChevronsDownUp size={15} />
+          </button>
+        </div>
+      </div>
+      <div className="segmented tree-filter" role="group" aria-label="表示するファイル">
+        <button className={mdOnly ? "on" : ""} aria-pressed={mdOnly} onClick={() => onFilter(true)}>.md のみ</button>
+        <button className={!mdOnly ? "on" : ""} aria-pressed={!mdOnly} onClick={() => onFilter(false)}>すべて</button>
+      </div>
+    </>
+  );
+}
+
 /**
  * ファイルツリー。展開している行を平らなリストにして、見えている行だけ描く（1万ファイルでも軽い）。
  * ↑↓ で移動、→← で開閉、Enter で開く。右クリックでファイル操作。
  */
-export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onChanged, onRenamed, onError, git }: Props) {
+export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, onOpen, onChanged, onRenamed, onError, git }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
+  const [expandTop, setExpandTop] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
@@ -53,7 +83,7 @@ export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onC
   const [keep, setKeep] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
-  const isOpen = (e: Entry, depth: number) => open[e.path] ?? depth < 1;
+  const isOpen = (e: Entry, depth: number) => open[e.path] ?? (expandTop && depth === 0);
 
   const shown = useMemo(() => filter(entries, mdOnly, keep), [entries, mdOnly, keep]);
   const rows = useMemo(() => {
@@ -71,18 +101,24 @@ export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onC
     walk(shown, 0, root);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown, open, creating, root]);
+  }, [shown, open, creating, root, expandTop]);
 
   const virt = useVirtualizer({
     count: rows.length,
     getItemKey: (i) => {
       const row = rows[i];
-      return row.kind === "create" ? `create:${row.dir}` : row.entry.path;
+      return row.kind === "create" ? `create:${row.dir}:${row.isDir}` : row.entry.path;
     },
     getScrollElement: () => scroller.current,
     estimateSize: () => ROW_H,
     overscan: 12,
   });
+
+  useLayoutEffect(() => {
+    if (!creating) return;
+    const index = rows.findIndex((r) => r.kind === "create");
+    if (index >= 0) virt.scrollToIndex(index, { align: "auto" });
+  }, [creating, rows, virt]);
 
   const indexOf = (path: string | null) => (path ? rows.findIndex((r) => r.kind === "entry" && r.entry.path === path) : -1);
 
@@ -208,70 +244,81 @@ export default function FileTree({ root, entries, mdOnly, openPaths, onOpen, onC
     if (firstOpen && document.activeElement !== scroller.current) setSelected(firstOpen);
   }, [firstOpen]);
 
-  if (!shown.length && !creating) {
-    return (
-      <div className="tree-empty" onContextMenu={(ev) => openMenu(ev, null)}>
-        {mdOnly ? "Markdown ファイルがありません" : "ファイルがありません"}
-        {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
-      </div>
-    );
-  }
+  const createInSelection = (isDir: boolean) => {
+    const row = rows[indexOf(selected)];
+    const dir = row?.kind === "entry" ? (row.entry.is_dir ? row.entry.path : row.parent) : root;
+    startCreate(dir, isDir);
+  };
 
   return (
-    <div
-      className="tree"
-      ref={scroller}
-      role="tree"
-      tabIndex={0}
-      onKeyDown={onKeyDown}
-      onContextMenu={(ev) => openMenu(ev, null)}
-    >
-      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
-        {virt.getVirtualItems().map((v) => {
-          const r = rows[v.index];
-          return (
-            <div key={v.key} className="tree-item" style={{ transform: `translateY(${v.start}px)`, height: ROW_H }}>
-              {r.kind === "create" ? (
-                <NameInput
-                  depth={r.depth}
-                  isDir={r.isDir}
-                  initial=""
-                  placeholder={r.isDir ? "フォルダ名" : "ファイル名.md"}
-                  onDone={commitCreate}
-                  onCancel={() => setCreating(null)}
-                />
-              ) : renaming === r.entry.path ? (
-                <NameInput
-                  depth={r.depth}
-                  isDir={r.entry.is_dir}
-                  name={r.entry.name}
-                  initial={r.entry.name}
-                  onDone={(n) => commitRename(r.entry.path, n)}
-                  onCancel={() => setRenaming(null)}
-                />
-              ) : (
-                <Row
-                  entry={r.entry}
-                  gitMark={git.get(r.entry.path)?.mark}
-                  gitFolder={git.get(r.entry.path)?.folder ?? false}
-                  depth={r.depth}
-                  expanded={r.entry.is_dir && isOpen(r.entry, r.depth)}
-                  active={!r.entry.is_dir && openPaths.includes(r.entry.path)}
-                  selected={selected === r.entry.path}
-                  onClick={(ev) => {
-                    setSelected(r.entry.path);
-                    if (r.entry.is_dir) toggle(r.entry, r.depth);
-                    else onOpen(r.entry.path, ev.metaKey || ev.ctrlKey, ev.altKey);
-                  }}
-                  onContextMenu={(ev) => openMenu(ev, r.entry)}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
-    </div>
+    <>
+      <ExplorerControls mdOnly={mdOnly} onFilter={onFilter} onCreate={createInSelection} onCollapse={() => {
+        setExpandTop(false);
+        setOpen({});
+        setCreating(null);
+      }} />
+      {!shown.length && !creating ? (
+        <div className="tree-empty" onContextMenu={(ev) => openMenu(ev, null)}>
+          {mdOnly ? "Markdown ファイルがありません" : "ファイルがありません"}
+          {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+        </div>
+      ) : (
+        <div
+          className="tree"
+          ref={scroller}
+          role="tree"
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          onContextMenu={(ev) => openMenu(ev, null)}
+        >
+          <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+            {virt.getVirtualItems().map((v) => {
+              const r = rows[v.index];
+              return (
+                <div key={v.key} className="tree-item" style={{ transform: `translateY(${v.start}px)`, height: ROW_H }}>
+                  {r.kind === "create" ? (
+                    <NameInput
+                      depth={r.depth}
+                      isDir={r.isDir}
+                      initial=""
+                      placeholder={r.isDir ? "フォルダ名" : "ファイル名.md"}
+                      onDone={commitCreate}
+                      onCancel={() => setCreating(null)}
+                    />
+                  ) : renaming === r.entry.path ? (
+                    <NameInput
+                      depth={r.depth}
+                      isDir={r.entry.is_dir}
+                      name={r.entry.name}
+                      initial={r.entry.name}
+                      onDone={(n) => commitRename(r.entry.path, n)}
+                      onCancel={() => setRenaming(null)}
+                    />
+                  ) : (
+                    <Row
+                      entry={r.entry}
+                      gitMark={git.get(r.entry.path)?.mark}
+                      gitFolder={git.get(r.entry.path)?.folder ?? false}
+                      depth={r.depth}
+                      expanded={r.entry.is_dir && isOpen(r.entry, r.depth)}
+                      active={!r.entry.is_dir && openPaths.includes(r.entry.path)}
+                      selected={selected === r.entry.path}
+                      onClick={(ev) => {
+                        setSelected(r.entry.path);
+                        if (r.entry.is_dir) toggle(r.entry, r.depth);
+                        else onOpen(r.entry.path, ev.metaKey || ev.ctrlKey, ev.altKey);
+                      }}
+                      onContextMenu={(ev) => openMenu(ev, r.entry)}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -300,13 +347,13 @@ const Row = memo(function Row({
 }) {
   const pad = 8 + depth * 14;
   const gitCls = gitMark ? `git-${gitMark}` : "";
-  // 右端の印: ファイルは M / U / A / C、変更を含むフォルダは点（無視されたものは薄くするだけ）
+  // 右端の印: ファイルは M / U / !、変更を含むフォルダは点（無視されたものは薄くするだけ）
   const gitEnd =
     !gitMark || gitMark === "I" ? null : gitFolder || entry.is_dir ? (
       <span className="git-dot" title={gitFolder ? "中に変更があります" : GIT_TITLE[gitMark]} />
     ) : (
       <span className="git-badge" title={GIT_TITLE[gitMark]}>
-        {gitMark === "C" ? "!" : gitMark}
+        {gitMark === "C" ? "!" : gitMark === "A" ? "U" : gitMark}
       </span>
     );
   if (entry.is_dir) {

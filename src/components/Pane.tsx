@@ -1,10 +1,12 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { Printer } from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, Columns2, Eye, Pencil, Printer } from "lucide-react";
 import PreviewPane, { type FindState } from "./PreviewPane";
 import TabBar from "./TabBar";
 import DiffView from "./DiffView";
 import type { EditorHandle } from "./Editor";
-import type { Heading } from "./OverviewRuler";
+import type { OutlineState } from "./Outline";
+import { norm } from "../lib/api";
+import { markdownHeadings } from "../lib/markdown";
 import { type DocTab, type PaneState, type ViewMode, activeTab, isDirty } from "../lib/tabs";
 import { useDrag } from "../lib/dnd";
 import { editorTopLine, previewTopLine, scrollEditorToLine, scrollPreviewToLine } from "../lib/scrollSync";
@@ -15,12 +17,15 @@ const Editor = lazy(() => import("./Editor"));
 /** App からペインへの指示（⌘F など）。n は押すたびに増える。 */
 export type PaneCommand = { type: "find"; n: number };
 
+export type PaneOutline = { paneId: string; tabId: string; mode: ViewMode; outline: OutlineState };
+
 type Props = {
   /** ペイン ID（分割ツリーの葉） */
   idx: string;
   pane: PaneState;
   active: boolean;
   rootDir: string | null;
+  onOutline: (value: PaneOutline) => void;
   command?: PaneCommand;
   /** タブごとのスクロール位置 */
   scrollOf: (tabId: string) => number;
@@ -42,10 +47,10 @@ type Props = {
   printTarget: boolean;
 };
 
-const MODES: [ViewMode, string, string][] = [
-  ["view", "表示", "表示 (⌘E で編集と切り替え)"],
-  ["edit", "編集", "編集 (⌘E)"],
-  ["split", "編集＋プレビュー", "左にエディタ、右にプレビュー（スクロールが連動）"],
+const MODES: [ViewMode, string, string, typeof Eye][] = [
+  ["view", "表示", "表示 (⌘E で編集と切り替え)", Eye],
+  ["edit", "編集", "編集 (⌘E)", Pencil],
+  ["split", "並べて", "左にエディタ、右にプレビュー（スクロールが連動）", Columns2],
 ];
 
 export default function Pane(props: Props) {
@@ -54,10 +59,19 @@ export default function Pane(props: Props) {
   const doc = tab?.kind === "doc" ? tab : undefined;
   const editor = useRef<EditorHandle>(null);
   const [find, setFind] = useState<FindState>({ open: false, query: "", index: 0, focus: 0 });
-  const [trail, setTrail] = useState<{ items: Heading[]; scrollTo: (top: number) => void }>({ items: [], scrollTo: () => {} });
-
-  // タブを切り替えたらパンくずを消す（新しいプレビューが描かれたら出し直す）
-  useEffect(() => setTrail((t) => ({ ...t, items: [] })), [tab?.id, doc?.mode]);
+  const [reported, setReported] = useState<{ tabId: string; mode: ViewMode; outline: OutlineState }>();
+  const tabId = doc?.id;
+  const mode = doc?.mode;
+  const editSource = mode === "edit" ? doc?.content : undefined;
+  const editHeadings = useMemo(() => editSource === undefined ? undefined : markdownHeadings(editSource), [editSource]);
+  const onOutline = useCallback((outline: OutlineState) => {
+    if (tabId && mode) setReported({ tabId, mode, outline });
+  }, [tabId, mode]);
+  const outline = reported?.tabId === tabId && reported?.mode === mode ? reported?.outline : undefined;
+  const publishOutline = props.onOutline;
+  useEffect(() => {
+    if (active && tabId && mode && outline) publishOutline({ paneId: idx, tabId, mode, outline });
+  }, [active, idx, tabId, mode, outline, publishOutline]);
 
   // ⌘F: 表示中はプレビュー内検索、編集中は CodeMirror の検索
   useEffect(() => {
@@ -68,50 +82,65 @@ export default function Pane(props: Props) {
   }, [command?.n]);
 
   const dirty = isDirty(doc);
-  const rel = doc && rootDir && doc.path.startsWith(rootDir) ? doc.path.slice(rootDir.length + 1) : doc?.path;
+  const path = doc ? norm(doc.path) : "";
+  const root = rootDir ? norm(rootDir).replace(/\/$/, "") : null;
+  const pathCrumbs = (root !== null && path.startsWith(root + "/") ? path.slice(root.length + 1) : path).split("/").filter(Boolean);
+  if (pathCrumbs.length === 1 && root) pathCrumbs.unshift(root.split("/").pop() ?? root);
+  const headingCrumbs: number[] = [];
+  if (outline) {
+    let level = 7;
+    for (let i = outline.current; i >= 0 && level > 1; i--) {
+      if (outline.headings[i].level >= level) continue;
+      level = outline.headings[i].level;
+      headingCrumbs.unshift(i);
+    }
+  }
 
   return (
-    <section className={`pane ${active ? "active" : ""} ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} data-pane={idx}>
+    <section className={`pane ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} data-pane={idx}>
       <TabBar
         paneId={idx}
         pane={pane}
         onActivate={props.onActivateTab}
         onClose={props.onCloseTab}
         onContextMenu={props.onTabMenu}
+        actions={doc && (
+          <div className="segmented pane-modes" role="group" aria-label="表示モード">
+            {MODES.map(([m, label, title, Icon]) => (
+              <button key={m} className={doc.mode === m ? "on" : ""} aria-pressed={doc.mode === m} aria-label={label} title={title} onClick={() => doc.mode !== m && onMode(m)}>
+                <Icon size={13} aria-hidden="true" /><span>{label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       />
       <div className="pane-drop-area">
-      {doc && (
+      {tab && (
         <header className="pane-header">
-          <span className="pane-title" title={doc.path}>
-            <span className="pane-file">{rel}</span>
-            {dirty && <span className="dirty" title="未保存の変更があります">●</span>}
-            {doc.mode !== "edit" && trail.items.length > 0 && (
-              <span className="crumbs" title={trail.items.map((h) => h.text).join(" › ")}>
-                {trail.items.map((h, i) => (
-                  <span key={i} className="crumb" onClick={() => trail.scrollTo(h.top - 8)}>
-                    {h.text}
-                  </span>
-                ))}
+          <nav className="crumbs" aria-label="パンくず" title={doc?.path}>
+            {(tab.kind === "diff" ? [`${tab.left} ↔ ${tab.right}`] : pathCrumbs).map((part, i) => (
+              <span className="crumb" key={i}>
+                {i > 0 && <ChevronRight size={12} aria-hidden="true" />}
+                <span>{part}</span>
               </span>
-            )}
-          </span>
-          <span className="pane-actions">
-            <div className="segmented" role="group" aria-label="表示モード">
-              {MODES.map(([m, label, title]) => (
-                <button key={m} className={doc.mode === m ? "on" : ""} title={title} onClick={() => doc.mode !== m && onMode(m)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {doc.mode !== "view" && (
-              <button className="btn" disabled={!dirty} onClick={onSave} title="保存 (⌘S)">
-                保存
+            ))}
+            {outline && headingCrumbs.map((i) => (
+              <span className="crumb" key={`heading:${i}`}>
+                <ChevronRight size={12} aria-hidden="true" />
+                <button type="button" title={outline.headings[i].text} onClick={() => outline.jump(i)}>{outline.headings[i].text}</button>
+              </span>
+            ))}
+          </nav>
+          {doc && (
+            <span className="pane-actions">
+              {doc.mode !== "view" && (
+                <button className="btn" disabled={!dirty} onClick={onSave} title="保存 (⌘S)">保存</button>
+              )}
+              <button className="icon-btn" onClick={props.onPrint} title="印刷 / PDF に書き出し" aria-label="印刷 / PDF に書き出し">
+                <Printer size={15} />
               </button>
-            )}
-            <button className="icon-btn" onClick={props.onPrint} title="印刷 / PDF に書き出し">
-              <Printer size={15} />
-            </button>
-          </span>
+            </span>
+          )}
         </header>
       )}
       {doc?.deleted && (
@@ -152,7 +181,7 @@ export default function Pane(props: Props) {
           onScroll={(top) => onScroll(tab.id, top)}
           find={find}
           setFind={setFind}
-          onTrail={(items, scrollTo) => setTrail({ items, scrollTo })}
+          onOutline={onOutline}
           onOpenLink={onOpenLink}
         />
       ) : tab.mode === "edit" ? (
@@ -163,6 +192,8 @@ export default function Pane(props: Props) {
                 key={tab.id}
                 ref={editor}
                 value={tab.content}
+                headings={editHeadings}
+                onOutline={onOutline}
                 onChange={onChange}
                 initialScroll={scrollOf(tab.id)}
                 onScroll={(top) => onScroll(tab.id, top)}
@@ -178,7 +209,7 @@ export default function Pane(props: Props) {
           editor={editor}
           onChange={onChange}
           onOpenLink={onOpenLink}
-          onTrail={(items, scrollTo) => setTrail({ items, scrollTo })}
+          onOutline={onOutline}
           initialScroll={scrollOf(tab.id)}
           onScroll={(top) => onScroll(tab.id, top)}
         />
@@ -207,7 +238,7 @@ function SplitEditor({
   editor,
   onChange,
   onOpenLink,
-  onTrail,
+  onOutline,
   initialScroll,
   onScroll,
 }: {
@@ -216,7 +247,7 @@ function SplitEditor({
   editor: React.RefObject<EditorHandle | null>;
   onChange: (content: string) => void;
   onOpenLink: Props["onOpenLink"];
-  onTrail: (items: Heading[], scrollTo: (top: number) => void) => void;
+  onOutline: (outline: OutlineState) => void;
   initialScroll: number;
   onScroll: (top: number) => void;
 }) {
@@ -299,7 +330,7 @@ function SplitEditor({
           onScroll={() => schedule("preview")}
           find={noFind}
           setFind={setNoFind}
-          onTrail={onTrail}
+          onOutline={onOutline}
           onOpenLink={onOpenLink}
           scrollerRef={preview}
         />

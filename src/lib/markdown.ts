@@ -174,6 +174,17 @@ md.core.ruler.after("inline", "task-list", (state: any) => {
 
 export const renderMarkdown = (src: string, base?: string) => md.render(src, { base } satisfies Env);
 
+/** Markdown の見出しと元の行番号（編集モードのアウトライン用）。 */
+export function markdownHeadings(src: string) {
+  const tokens = md.parse(src, {});
+  return tokens.flatMap((token, i) => {
+    if (token.type !== "heading_open" || !token.map) return [];
+    const inline = tokens[i + 1];
+    const text = inline.children?.filter((t) => t.type === "text" || t.type === "code_inline").map((t) => t.content).join("").trim();
+    return [{ level: Number(token.tag[1]), text: text || inline.content, line: token.map[0] }];
+  });
+}
+
 // ---- 見えた部分から順に描画（Shiki・Mermaid） ----
 
 /** プレーン表示のコードブロックを Shiki で色付けする。色付けできない言語なら何もしない。 */

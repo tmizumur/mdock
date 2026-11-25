@@ -19,6 +19,8 @@ export type Settings = {
   mdOnly: boolean;
   /** 画面のアニメーションを表示する */
   animations: boolean;
+  /** ウィンドウ下部にステータスバーを表示する */
+  statusBar: boolean;
   /** エディタの書体 */
   editorFont: EditorFont;
   /** 新しい版を自動で確認する（1時間ごと） */
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showHidden: false,
   mdOnly: true,
   animations: true,
+  statusBar: true,
   editorFont: "mono",
   autoUpdate: true,
   gitStatus: true,

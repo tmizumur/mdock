@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 pub enum Mark {
     /// 変更あり
     M,
-    /// 新規（ステージ済み）・名前の変更
+    /// 新規（ステージ済み）
     A,
     /// 未追跡
     U,
@@ -37,16 +37,15 @@ pub struct GitEntry {
     pub dir: bool,
 }
 
-/// XY の2文字から状態を決める。削除されたものは表示しないので None。
+/// XY の2文字から状態を決める。
 fn mark_of(x: u8, y: u8) -> Option<Mark> {
     match (x, y) {
         (b'?', b'?') => Some(Mark::U),
         (b'!', b'!') => Some(Mark::I),
         // 競合（unmerged）
         (b'D', b'D') | (b'A', b'U') | (b'U', b'D') | (b'U', b'A') | (b'D', b'U') | (b'A', b'A') | (b'U', b'U') => Some(Mark::C),
-        (b'D', _) | (_, b'D') => None,
-        (b'A', _) | (b'R', _) | (b'C', _) | (_, b'A') => Some(Mark::A),
-        _ if matches!(x, b'M' | b'T') || matches!(y, b'M' | b'T' | b'R' | b'C') => Some(Mark::M),
+        (b'A', _) | (_, b'A') => Some(Mark::A),
+        _ if [x, y].iter().any(|c| matches!(c, b'M' | b'T' | b'R' | b'C' | b'D')) => Some(Mark::M),
         _ => None,
     }
 }
@@ -145,15 +144,21 @@ pub fn branch(root: &str) -> Option<String> {
 }
 
 /// root の git の状態。git リポジトリでない・git が無いときは None。
-pub fn status(root: &str) -> Option<Vec<GitEntry>> {
+pub fn status(root: &str, include_ignored: bool, count_files: bool) -> Option<Vec<GitEntry>> {
     let dir = Path::new(root);
     let top = git(dir, &["rev-parse", "--show-toplevel"])?;
     let top = PathBuf::from(String::from_utf8_lossy(&top).trim());
     let real_root = std::fs::canonicalize(dir).ok()?;
     let real_top = std::fs::canonicalize(&top).unwrap_or(top);
     let rel = real_root.strip_prefix(&real_top).ok()?.to_string_lossy().replace('\\', "/");
-    // 未追跡・無視のフォルダは中身を列挙せずフォルダ1つで返させる（大きなリポジトリでも速い）
-    let out = git(dir, &["status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=normal", "."])?;
+    // 件数を表示するときは、未追跡フォルダの中もファイル単位で数える。
+    let mut args = vec!["status", "--porcelain=v1", "-z"];
+    if include_ignored {
+        args.push("--ignored=matching");
+    }
+    args.push(if count_files { "--untracked-files=all" } else { "--untracked-files=normal" });
+    args.push(".");
+    let out = git(dir, &args)?;
     Some(parse_porcelain(&out).iter().filter_map(|i| to_abs(root, &rel, i)).collect())
 }
 
@@ -185,9 +190,12 @@ mod tests {
     }
 
     #[test]
-    fn skips_deleted_and_rename_source() {
+    fn counts_deletions_and_skips_rename_source() {
         let out = b" D gone.md\0D  gone2.md\0R  new name.md\0old name.md\0 M after.md\0";
-        assert_eq!(parse_porcelain(out), vec![item("new name.md", Mark::A), item("after.md", Mark::M)]);
+        assert_eq!(
+            parse_porcelain(out),
+            vec![item("gone.md", Mark::M), item("gone2.md", Mark::M), item("new name.md", Mark::M), item("after.md", Mark::M)]
+        );
     }
 
     #[test]
@@ -245,7 +253,7 @@ mod tests {
 
         let root = sub.to_string_lossy().to_string();
         let mut got: Vec<(String, Mark, bool)> =
-            status(&root).unwrap().into_iter().map(|e| (e.path[root.len() + 1..].to_string(), e.mark, e.dir)).collect();
+            status(&root, true, false).unwrap().into_iter().map(|e| (e.path[root.len() + 1..].to_string(), e.mark, e.dir)).collect();
         got.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             got,

@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Preview, { type FindResult } from "./Preview";
 import FindBar from "./FindBar";
 import OverviewRuler, { type Heading, useOutline } from "./OverviewRuler";
+import type { OutlineState } from "./Outline";
 import type { DocTab } from "../lib/tabs";
 
 export type FindState = { open: boolean; query: string; index: number; focus: number };
@@ -13,19 +14,21 @@ type Props = {
   onScroll: (top: number) => void;
   find: FindState;
   setFind: (f: (s: FindState) => FindState) => void;
-  onTrail: (trail: Heading[], scrollTo: (top: number) => void) => void;
+  onOutline: (outline: OutlineState) => void;
   onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
   /** スクロールする要素（編集＋プレビューの同期で使う） */
   scrollerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
 /** プレビューと、右端の帯・検索バーをまとめたもの */
-export default function PreviewPane({ id, tab, initialScroll, onScroll, find, setFind, onTrail, onOpenLink, scrollerRef }: Props) {
+export default function PreviewPane({ id, tab, initialScroll, onScroll, find, setFind, onOutline, onOpenLink, scrollerRef }: Props) {
   const own = useRef<HTMLDivElement>(null);
   const body = scrollerRef ?? own;
   const [version, setVersion] = useState(0);
   const [result, setResult] = useState<FindResult>({ count: 0, tops: [] });
-  const { headings, metrics, trail } = useOutline(body, version, true);
+  const { headings, metrics, current } = useOutline(body, version);
+  const [jumped, setJumped] = useState<{ heading: Heading; top: number }>();
+  const jumpedIndex = jumped ? headings.indexOf(jumped.heading) : -1;
 
   // タブを開いたときに前回のスクロール位置へ戻す。図や色付けで高さが変わるので少し後にもう一度。
   useLayoutEffect(() => {
@@ -45,12 +48,17 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
 
-  const scrollTo = (top: number) => body.current && (body.current.scrollTop = top);
-  const trailKey = trail.map((h) => h.text).join("\u0000");
+  const scrollTo = useCallback((top: number) => {
+    if (body.current) body.current.scrollTop = top;
+  }, [body]);
+  const jump = useCallback((i: number) => {
+    const heading = headings[i];
+    scrollTo(heading.top - 8);
+    setJumped({ heading, top: body.current?.scrollTop ?? 0 });
+  }, [body, headings, scrollTo]);
   useEffect(() => {
-    onTrail(trail, scrollTo);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trailKey]);
+    onOutline({ headings, current: jumpedIndex < 0 ? current : jumpedIndex, jump });
+  }, [headings, current, jumpedIndex, jump, onOutline]);
 
   return (
     <div className="pane-main">
@@ -70,6 +78,7 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
         ref={body}
         onScroll={(e) => {
           const el = e.currentTarget;
+          if (jumped && Math.abs(jumped.top - el.scrollTop) > 1) setJumped(undefined);
           stick.current = el.scrollTop > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
           onScroll(el.scrollTop);
         }}

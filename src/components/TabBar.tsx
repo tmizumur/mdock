@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
 import { GitCompare } from "lucide-react";
 import { type PaneState, isDirty, tabTitle } from "../lib/tabs";
 import { TreeIcon, fileIcon } from "../lib/fileIcons";
@@ -7,6 +7,7 @@ import { beginDrag, useDrag } from "../lib/dnd";
 type Props = {
   paneId: string;
   pane: PaneState;
+  actions?: ReactNode;
   onActivate: (idx: number) => void;
   onClose: (idx: number) => void;
   onContextMenu: (idx: number, x: number, y: number) => void;
@@ -16,7 +17,7 @@ type Props = {
  * ペインの上のタブ。中クリックで閉じる。
  * ドラッグで並べ替え・ほかのペインへ移動・ペインの端に落として分割（移動の処理は App の setDropHandler）。
  */
-export default function TabBar({ paneId, pane, onActivate, onClose, onContextMenu }: Props) {
+export default function TabBar({ paneId, pane, actions, onActivate, onClose, onContextMenu }: Props) {
   const drag = useDrag();
   const dropAt = drag.target?.type === "tabbar" && drag.target.paneId === paneId ? drag.target.index : null;
   const draggingId = drag.item?.kind === "tab" ? drag.item.tabId : null;
@@ -53,56 +54,67 @@ export default function TabBar({ paneId, pane, onActivate, onClose, onContextMen
     }
   }, [tabOrder, pane.active]);
 
-  if (!pane.tabs.length) return null;
+  useLayoutEffect(() => {
+    const strip = barRef.current;
+    const tab = strip?.querySelector<HTMLElement>(".tab.on");
+    if (!strip || !tab) return;
+    const left = tab.offsetLeft - 2;
+    const right = tab.offsetLeft + tab.offsetWidth + 2;
+    if (left < strip.scrollLeft) strip.scrollLeft = left;
+    else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth;
+  }, [tabOrder, pane.active]);
 
   return (
-    <div className={`tabbar ${dropAt !== null ? "drop-target" : ""}`} ref={barRef} role="tablist">
-      {pane.tabs.map((t, i) => {
-        const dirty = isDirty(t);
-        return (
-          <div
-            key={t.id}
-            data-tab-id={t.id}
-            role="tab"
-            aria-selected={i === pane.active}
-            className={`tab ${i === pane.active ? "on" : ""} ${draggingId === t.id ? "dragging" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
-            title={t.kind === "doc" ? t.path : `${t.left}\n↔ ${t.right}`}
-            onPointerDown={(e) => {
-              if ((e.target as HTMLElement).closest(".tab-close")) return;
-              beginDrag(e, { kind: "tab", paneId, tabId: t.id, title: tabTitle(t) });
-            }}
-            onMouseDown={(e) => {
-              if (e.button === 0) onActivate(i);
-            }}
-            onAuxClick={(e) => {
-              if (e.button === 1) {
+    <div className={`tabbar ${dropAt !== null ? "drop-target" : ""}`}>
+      <div className="tab-strip" role="tablist" ref={barRef}>
+        {pane.tabs.map((t, i) => {
+          const dirty = isDirty(t);
+          return (
+            <div
+              key={t.id}
+              data-tab-id={t.id}
+              role="tab"
+              aria-selected={i === pane.active}
+              className={`tab ${i === pane.active ? "on" : ""} ${draggingId === t.id ? "dragging" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
+              title={t.kind === "doc" ? t.path : `${t.left}\n↔ ${t.right}`}
+              onPointerDown={(e) => {
+                if ((e.target as HTMLElement).closest(".tab-close")) return;
+                beginDrag(e, { kind: "tab", paneId, tabId: t.id, title: tabTitle(t) });
+              }}
+              onMouseDown={(e) => {
+                if (e.button === 0) onActivate(i);
+              }}
+              onAuxClick={(e) => {
+                if (e.button === 1) {
+                  e.preventDefault();
+                  onClose(i);
+                }
+              }}
+              onContextMenu={(e) => {
                 e.preventDefault();
-                onClose(i);
-              }
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              onContextMenu(i, e.clientX, e.clientY);
-            }}
-          >
-            {t.kind === "doc" ? <TreeIcon def={fileIcon(tabTitle(t))} /> : <GitCompare size={14} className="tree-icon" />}
-            <span className="tab-name">{tabTitle(t)}</span>
-            {dirty && <span className="tab-dirty" aria-label="未保存の変更">●</span>}
-            <button
-              className="tab-close"
-              aria-label="閉じる"
-              title={dirty ? "未保存の変更があります（閉じる ⌘W）" : "閉じる (⌘W)"}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                onClose(i);
+                onContextMenu(i, e.clientX, e.clientY);
               }}
             >
-              ×
-            </button>
-          </div>
-        );
-      })}
+              {t.kind === "doc" ? <TreeIcon def={fileIcon(tabTitle(t))} /> : <GitCompare size={14} className="tree-icon" />}
+              <span className="tab-name">{tabTitle(t)}</span>
+              {dirty && <span className="tab-dirty" aria-label="未保存の変更">●</span>}
+              <button
+                className="tab-close"
+                aria-label="閉じる"
+                title={dirty ? "未保存の変更があります（閉じる ⌘W）" : "閉じる (⌘W)"}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(i);
+                }}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {actions}
     </div>
   );
 }
