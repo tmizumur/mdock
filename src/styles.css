@@ -314,6 +314,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pane.active { border-top-color: transparent; }
 .pane-header { height: 32px; }
 
+/* 外部での変更・削除の知らせ（ペインの上部） */
+.file-notice {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  background: var(--accent-soft); font-size: 12.5px;
+}
+.file-notice small { color: var(--fg-muted); }
+.file-notice .btn { padding: 2px 8px; font-size: 12px; }
+
 /* 編集＋プレビュー */
 .editor-body { overflow: hidden; }
 .split-edit { flex: 1; min-height: 0; display: flex; }

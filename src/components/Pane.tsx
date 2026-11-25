@@ -32,6 +32,10 @@ type Props = {
   onChange: (content: string) => void;
   onMode: (mode: ViewMode) => void;
   onSave: () => void;
+  /** 外部で変更された内容を読み込む（自分の未保存の変更は捨てる） */
+  onReloadExternal: () => void;
+  /** 外部の変更を読み込まず、自分の変更を保持する */
+  onKeepMine: () => void;
   onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
   onPrint: () => void;
   /** 印刷するときに出すペイン（前面のペイン） */
@@ -109,6 +113,24 @@ export default function Pane(props: Props) {
             </button>
           </span>
         </header>
+      )}
+      {doc?.deleted && (
+        <div className="file-notice" role="status">
+          このファイルは削除されました。
+          <small>{dirty ? "保存すると、この内容で作り直します。" : "同じ名前で作り直されると、自動で表示し直します。"}</small>
+        </div>
+      )}
+      {doc && !doc.deleted && doc.external !== undefined && (
+        <div className="file-notice" role="status">
+          外部で変更されました
+          <span className="spacer" />
+          <button className="btn" onClick={props.onReloadExternal} title="外部の内容を読み込みます（未保存の変更は失われます）">
+            再読み込み
+          </button>
+          <button className="btn" onClick={props.onKeepMine} title="外部の変更は読み込まず、今の編集を続けます（保存すると上書きします）">
+            自分の変更を保持
+          </button>
+        </div>
       )}
       {!tab ? (
         <div className="placeholder">

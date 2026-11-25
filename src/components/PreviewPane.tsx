@@ -37,6 +37,14 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 末尾まで読んでいるときは、外部で追記されたら末尾に付いていく（ログのように）
+  const stick = useRef(false);
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (el && stick.current && !scrollerRef) el.scrollTop = el.scrollHeight;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
+
   const scrollTo = (top: number) => body.current && (body.current.scrollTop = top);
   const trailKey = trail.map((h) => h.text).join("\u0000");
   useEffect(() => {
@@ -57,7 +65,15 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
           onClose={() => setFind((f) => ({ ...f, open: false }))}
         />
       )}
-      <div className="pane-body" ref={body} onScroll={(e) => onScroll(e.currentTarget.scrollTop)}>
+      <div
+        className="pane-body"
+        ref={body}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollTop > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+          onScroll(el.scrollTop);
+        }}
+      >
         <Preview
           id={id}
           path={tab.path}
@@ -68,6 +84,7 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
           find={find.open ? { query: find.query, index: find.index } : undefined}
           onFindResult={setResult}
           onRendered={() => setVersion((v) => v + 1)}
+          immediate={tab.content === tab.saved}
         />
       </div>
       <OverviewRuler headings={headings} metrics={metrics} marks={find.open ? result.tops : undefined} onScrollTo={scrollTo} />

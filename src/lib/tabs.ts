@@ -14,6 +14,10 @@ export type DocTab = {
   mode: ViewMode;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンクから開いたとき） */
   anchor?: { id: string; nonce: number };
+  /** ファイルが外部で削除された（同名で作り直されたら戻る） */
+  deleted?: boolean;
+  /** 未保存の変更があるときに、外部で書き換わった内容（再読み込みするか確認する） */
+  external?: string;
 };
 
 export type DiffTab = {
