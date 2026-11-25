@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 pub enum Mark {
     /// 変更あり
     M,
-    /// 新規（ステージ済み）
+    /// 新規（ステージ済み）・名前の変更
     A,
     /// 未追跡
     U,
@@ -37,55 +37,60 @@ pub struct GitEntry {
     pub dir: bool,
 }
 
-/// XY の2文字から状態を決める。
+/// XY の2文字から状態を決める。削除されたものは表示しないので None。
 fn mark_of(x: u8, y: u8) -> Option<Mark> {
     match (x, y) {
         (b'?', b'?') => Some(Mark::U),
         (b'!', b'!') => Some(Mark::I),
         // 競合（unmerged）
         (b'D', b'D') | (b'A', b'U') | (b'U', b'D') | (b'U', b'A') | (b'D', b'U') | (b'A', b'A') | (b'U', b'U') => Some(Mark::C),
-        (b'A', _) | (_, b'A') => Some(Mark::A),
-        _ if [x, y].iter().any(|c| matches!(c, b'M' | b'T' | b'R' | b'C' | b'D')) => Some(Mark::M),
+        (b'D', _) | (_, b'D') => None,
+        (b'A', _) | (b'R', _) | (b'C', _) | (_, b'A') => Some(Mark::A),
+        _ if matches!(x, b'M' | b'T') || matches!(y, b'M' | b'T' | b'R' | b'C') => Some(Mark::M),
         _ => None,
     }
 }
 
 /// `git status --porcelain=v1 -z` の出力を読む。
 /// 各項目は "XY path\0"。名前の変更・コピー（X か Y が R/C）は続けて元のパスが "\0" 区切りで付く。
-pub fn parse_porcelain(out: &[u8]) -> Vec<Item> {
-    let mut items = Vec::new();
+fn porcelain_records(out: &[u8]) -> impl Iterator<Item = (u8, u8, &[u8])> {
     let mut parts = out.split(|b| *b == 0);
-    while let Some(rec) = parts.next() {
-        if rec.len() < 4 || rec[2] != b' ' {
-            continue;
-        }
+    std::iter::from_fn(move || {
+        let rec = parts.find(|rec| rec.len() >= 4 && rec[2] == b' ')?;
         let (x, y) = (rec[0], rec[1]);
         // 名前の変更・コピーは元のパスが次に来るので読み飛ばす
         if matches!(x, b'R' | b'C') || matches!(y, b'R' | b'C') {
             parts.next();
         }
-        let Some(mark) = mark_of(x, y) else { continue };
-        items.push(Item { path: String::from_utf8_lossy(&rec[3..]).into_owned(), mark });
-    }
-    items
+        Some((x, y, &rec[3..]))
+    })
+}
+
+pub fn parse_porcelain(out: &[u8]) -> Vec<Item> {
+    porcelain_records(out)
+        .filter_map(|(x, y, path)| {
+            let mark = mark_of(x, y)?;
+            Some(Item { path: String::from_utf8_lossy(path).into_owned(), mark })
+        })
+        .collect()
 }
 
 /// リポジトリ基準のパスを、開いているフォルダ（root）の下の絶対パスにする。
 /// `rel` は root のリポジトリ内での位置（root がリポジトリのルートなら ""）。root の外のものは None。
 pub fn to_abs(root: &str, rel: &str, item: &Item) -> Option<GitEntry> {
     let dir = item.path.ends_with('/');
-    let p = item.path.trim_end_matches('/');
-    let sub = if rel.is_empty() {
-        p
-    } else if let Some(s) = p.strip_prefix(rel).and_then(|s| s.strip_prefix('/')) {
-        s
-    } else {
-        return None;
-    };
-    if sub.is_empty() {
-        return None;
-    }
+    let sub = path_in_root(rel, &item.path)?;
     Some(GitEntry { path: format!("{}/{}", root.trim_end_matches('/'), sub), mark: item.mark, dir })
+}
+
+fn path_in_root<'a>(rel: &str, path: &'a str) -> Option<&'a str> {
+    let path = path.trim_end_matches('/');
+    let sub = if rel.is_empty() {
+        path
+    } else {
+        path.strip_prefix(rel)?.strip_prefix('/')?
+    };
+    (!sub.is_empty()).then_some(sub)
 }
 
 /// 使える git の場所。macOS の /usr/bin/git はコマンドラインツールが無いとインストールの案内を出してしまうので、
@@ -143,8 +148,8 @@ pub fn branch(root: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&name).trim_end().to_owned())
 }
 
-/// root の git の状態。git リポジトリでない・git が無いときは None。
-pub fn status(root: &str, include_ignored: bool, count_files: bool) -> Option<Vec<GitEntry>> {
+/// root の Git の状態と、ステータスバー用の削除件数。
+pub fn status(root: &str, include_ignored: bool, count_files: bool) -> Option<(Vec<GitEntry>, usize)> {
     let dir = Path::new(root);
     let top = git(dir, &["rev-parse", "--show-toplevel"])?;
     let top = PathBuf::from(String::from_utf8_lossy(&top).trim());
@@ -159,7 +164,19 @@ pub fn status(root: &str, include_ignored: bool, count_files: bool) -> Option<Ve
     args.push(if count_files { "--untracked-files=all" } else { "--untracked-files=normal" });
     args.push(".");
     let out = git(dir, &args)?;
-    Some(parse_porcelain(&out).iter().filter_map(|i| to_abs(root, &rel, i)).collect())
+    let entries = parse_porcelain(&out).iter().filter_map(|i| to_abs(root, &rel, i)).collect();
+    let deleted = if count_files {
+        porcelain_records(&out)
+            .filter(|&(x, y, path)| {
+                (x == b'D' || y == b'D')
+                    && mark_of(x, y).is_none()
+                    && path_in_root(&rel, &String::from_utf8_lossy(path)).is_some()
+            })
+            .count()
+    } else {
+        0
+    };
+    Some((entries, deleted))
 }
 
 #[cfg(test)]
@@ -190,12 +207,9 @@ mod tests {
     }
 
     #[test]
-    fn counts_deletions_and_skips_rename_source() {
+    fn skips_deleted_and_rename_source() {
         let out = b" D gone.md\0D  gone2.md\0R  new name.md\0old name.md\0 M after.md\0";
-        assert_eq!(
-            parse_porcelain(out),
-            vec![item("gone.md", Mark::M), item("gone2.md", Mark::M), item("new name.md", Mark::M), item("after.md", Mark::M)]
-        );
+        assert_eq!(parse_porcelain(out), vec![item("new name.md", Mark::A), item("after.md", Mark::M)]);
     }
 
     #[test]
@@ -243,17 +257,21 @@ mod tests {
         run(&["config", "user.name", "t"]);
         std::fs::write(base.join(".gitignore"), "*.log\n").unwrap();
         std::fs::write(sub.join("a.md"), "a").unwrap();
+        std::fs::write(sub.join("gone.md"), "gone").unwrap();
         run(&["add", "."]);
         run(&["commit", "-qm", "init"]);
         std::fs::write(sub.join("a.md"), "changed").unwrap();
+        std::fs::remove_file(sub.join("gone.md")).unwrap();
         std::fs::write(sub.join("b.md"), "new").unwrap();
         std::fs::write(sub.join("x.log"), "ignored").unwrap();
         std::fs::create_dir_all(sub.join("tmp")).unwrap();
         std::fs::write(sub.join("tmp/c.md"), "c").unwrap();
 
         let root = sub.to_string_lossy().to_string();
+        let (entries, deleted) = status(&root, true, false).unwrap();
+        assert_eq!(deleted, 0);
         let mut got: Vec<(String, Mark, bool)> =
-            status(&root, true, false).unwrap().into_iter().map(|e| (e.path[root.len() + 1..].to_string(), e.mark, e.dir)).collect();
+            entries.into_iter().map(|e| (e.path[root.len() + 1..].to_string(), e.mark, e.dir)).collect();
         got.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             got,
@@ -264,6 +282,9 @@ mod tests {
                 ("x.log".into(), Mark::I, false),
             ]
         );
+        let (entries, deleted) = status(&root, true, true).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!entries.iter().any(|e| e.path.ends_with("/gone.md")));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

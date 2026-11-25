@@ -95,7 +95,7 @@ export default function TabBar({ paneId, pane, actions, onActivate, onClose, onC
                 onContextMenu(i, e.clientX, e.clientY);
               }}
             >
-              {t.kind === "doc" ? <TreeIcon def={fileIcon(tabTitle(t))} /> : <GitCompare size={14} className="tree-icon" />}
+              {t.kind === "doc" ? <TreeIcon icon={fileIcon(tabTitle(t))} /> : <GitCompare size={14} className="tree-icon" />}
               <span className="tab-name">{tabTitle(t)}</span>
               {dirty && <span className="tab-dirty" aria-label="未保存の変更">●</span>}
               <button

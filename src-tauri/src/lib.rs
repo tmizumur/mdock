@@ -361,12 +361,11 @@ struct GitStatus {
 async fn git_status(root: String, include_entries: bool, include_counts: bool) -> Result<Option<GitStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let branch = git::branch(&root)?;
-        let mut entries = if include_entries || include_counts {
+        let (mut entries, mut modified) = if include_entries || include_counts {
             git::status(&root, include_entries, include_counts).unwrap_or_default()
         } else {
-            Vec::new()
+            (Vec::new(), 0)
         };
-        let mut modified = 0;
         let mut added = 0;
         if include_counts {
             for entry in &entries {

@@ -322,7 +322,7 @@ export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, o
   );
 }
 
-const GIT_TITLE: Record<GitMark, string> = { M: "変更あり", A: "追加（ステージ済み）", U: "未追跡", C: "競合", I: "無視（.gitignore）" };
+const GIT_TITLE: Record<GitMark, string> = { M: "変更あり", A: "追加（ステージ済み）・名前変更", U: "未追跡", C: "競合", I: "無視（.gitignore）" };
 
 const Row = memo(function Row({
   entry,
@@ -368,7 +368,7 @@ const Row = memo(function Row({
         onContextMenu={onContextMenu}
       >
         <ChevronRight className="chev" size={10} aria-hidden="true" />
-        <TreeIcon def={folderIcon(entry.name, expanded)} />
+        <TreeIcon icon={folderIcon(expanded)} />
         <span className="tree-name">{entry.name}</span>
         {gitEnd}
       </div>
@@ -385,7 +385,7 @@ const Row = memo(function Row({
       onClick={onClick}
       onContextMenu={onContextMenu}
     >
-      <TreeIcon def={fileIcon(entry.name)} />
+      <TreeIcon icon={fileIcon(entry.name)} />
       <span className="tree-name">{entry.name}</span>
       {gitEnd}
     </div>
@@ -430,7 +430,7 @@ function NameInput({
   return (
     <div className="tree-row editing" style={{ paddingLeft: 8 + depth * 14 + (isDir ? 0 : 16) }}>
       {isDir && <span className="chev">▸</span>}
-      <TreeIcon def={isDir ? folderIcon(name ?? "", false) : fileIcon(name ?? "a.md")} />
+      <TreeIcon icon={isDir ? folderIcon(false) : fileIcon(name ?? "a.md")} />
       <input
         ref={ref}
         className="tree-input"

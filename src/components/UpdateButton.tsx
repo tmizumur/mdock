@@ -118,7 +118,7 @@ export default function UpdateButton({ beforeRestart }: Props) {
         {progress !== null ? `更新中… ${progress}%` : `v${update.version} に更新`}
       </button>
       {open && (
-        <div className="popover update-pop" role="dialog" aria-label="アップデート">
+        <div className="popover dialog-surface update-pop" role="dialog" aria-label="アップデート">
           <div className="update-head">
             <strong>v{update.version}</strong>
             <span className="menu-label">

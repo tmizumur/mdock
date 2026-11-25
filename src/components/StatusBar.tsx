@@ -25,7 +25,7 @@ export default function StatusBar({ live, branch, modified, added, tab, fontSize
         <>
           <span className="status-branch" title={branch}>{branch}</span>
           <span className="status-modified" title="変更・削除・競合したファイル">M {modified}</span>
-          <span className="status-added" title="新規ファイル">U {added}</span>
+          <span className="status-added" title="新規・名前変更・未追跡のファイル">U {added}</span>
         </>
       )}
       <span className="spacer" />

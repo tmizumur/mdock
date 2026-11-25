@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type UnsavedChoice = "save" | "discard" | "cancel";
 
@@ -24,38 +24,43 @@ export function useUnsavedDialog() {
 }
 
 function UnsavedDialog({ message, detail, onChoose }: { message: string; detail?: string; onChoose: (c: UnsavedChoice) => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
   const saveBtn = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const element = dialog.current!;
+    element.showModal();
     saveBtn.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onChoose("cancel");
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onChoose]);
+    return () => element.close();
+  }, []);
+
   return (
-    <div className="modal-backdrop">
-      <div className="modal" role="alertdialog" aria-modal aria-label={message}>
-        <div className="modal-title">{message}</div>
-        {detail && <div className="modal-detail">{detail}</div>}
-        <div className="modal-actions">
-          <button className="btn" onClick={() => onChoose("discard")}>
-            保存しない
-          </button>
-          <span className="spacer" />
-          <button className="btn" onClick={() => onChoose("cancel")}>
-            キャンセル
-          </button>
-          <button className="btn primary" ref={saveBtn} onClick={() => onChoose("save")}>
-            保存
-          </button>
-        </div>
+    <dialog
+      ref={dialog}
+      className="dialog-surface modal"
+      role="alertdialog"
+      aria-modal
+      aria-label={message}
+      aria-describedby={detail ? "unsaved-detail" : undefined}
+      onCancel={(e) => {
+        e.preventDefault();
+        onChoose("cancel");
+      }}
+    >
+      <div className="modal-title">{message}</div>
+      {detail && <div className="modal-detail" id="unsaved-detail">{detail}</div>}
+      <div className="modal-actions">
+        <button className="btn" onClick={() => onChoose("discard")}>
+          保存しない
+        </button>
+        <span className="spacer" />
+        <button className="btn" onClick={() => onChoose("cancel")}>
+          キャンセル
+        </button>
+        <button className="btn primary" ref={saveBtn} onClick={() => onChoose("save")}>
+          保存
+        </button>
       </div>
-    </div>
+    </dialog>
   );
 }
 
