@@ -1,13 +1,12 @@
 mod git;
+mod watch;
 
-use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult, Debouncer};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WebviewWindowBuilder};
 
 /// フォルダツリーの1要素
@@ -52,18 +51,78 @@ fn walk(dir: &Path, depth: usize, hidden: bool) -> Vec<Entry> {
     entries
 }
 
+// 読み込みは画面（メインスレッド）を止めないよう、別スレッドで行う
+
 #[tauri::command]
-fn read_tree(root: String, show_hidden: Option<bool>) -> Result<Vec<Entry>, String> {
-    let root = PathBuf::from(root);
-    if !root.is_dir() {
-        return Err("フォルダが見つかりません".into());
-    }
-    Ok(walk(&root, 0, show_hidden.unwrap_or(false)))
+async fn read_tree(root: String, show_hidden: Option<bool>) -> Result<Vec<Entry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(root);
+        if !root.is_dir() {
+            return Err("フォルダが見つかりません".into());
+        }
+        Ok(walk(&root, 0, show_hidden.unwrap_or(false)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 変更のあったフォルダだけを読み直す（ツリー全体を読み直すと重いため）。
+/// フォルダごとに中身（サブツリー）を返す。フォルダが無くなっていれば null。
+#[tauri::command]
+async fn read_dirs(dirs: Vec<String>, show_hidden: Option<bool>) -> Result<Vec<Option<Vec<Entry>>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let hidden = show_hidden.unwrap_or(false);
+        dirs.iter()
+            .map(|d| {
+                let p = Path::new(d);
+                p.is_dir().then(|| walk(p, 0, hidden))
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn read_text(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| e.to_string())
+async fn read_text(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || fs::read_to_string(&path).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// ファイルの状態（外部での変更の確認に使う）
+#[derive(Serialize)]
+struct Stat {
+    exists: bool,
+    is_dir: bool,
+    /// 更新時刻（ミリ秒）
+    mtime: f64,
+    size: u64,
+}
+
+#[tauri::command]
+async fn stat_paths(paths: Vec<String>) -> Result<Vec<Stat>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|p| match fs::metadata(p) {
+                Ok(m) => Stat {
+                    exists: true,
+                    is_dir: m.is_dir(),
+                    mtime: m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0),
+                    size: m.len(),
+                },
+                Err(_) => Stat { exists: false, is_dir: false, mtime: 0.0, size: 0 },
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -226,32 +285,63 @@ fn save_settings(app: AppHandle, json: String) -> Result<(), String> {
 // ---- フォルダの監視 ----
 
 /// 開いているフォルダの監視（ウィンドウごと）。新しいフォルダを開くと前の監視は止まる。
+struct WindowWatch {
+    watch: watch::FolderWatch,
+    /// 開いているファイル（フォルダの外のものも監視するため。フォルダを開き直しても引き継ぐ）
+    files: Vec<PathBuf>,
+}
+
 #[derive(Default)]
-struct WatchState(Mutex<HashMap<String, Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>);
+struct WatchState(Mutex<HashMap<String, WindowWatch>>);
+
+/// 画面に送る変更の知らせ
+#[derive(Serialize, Clone)]
+struct FsChange {
+    paths: Vec<String>,
+    /// 取りこぼした可能性がある（監視の再接続など）。開いているものを全部確かめ直す
+    rescan: bool,
+}
+
+fn start_watch(app: &AppHandle, label: &str, root: Option<&Path>, files: Vec<PathBuf>) -> Result<watch::FolderWatch, String> {
+    // 開いたフォルダがリポジトリの途中なら、上にある .git も監視する（コミットやステージでも git の状態を更新するため）
+    let extra: Vec<PathBuf> = root
+        .and_then(git::find_git_dir)
+        .filter(|gd| root.is_some_and(|r| !gd.starts_with(r)))
+        .into_iter()
+        .collect();
+    let app = app.clone();
+    let target = label.to_string();
+    watch::FolderWatch::start(root.map(Path::to_path_buf), extra, files, watch::Timing::default(), move |b| {
+        let ev = FsChange { paths: b.paths.iter().map(|p| p.to_string_lossy().to_string()).collect(), rescan: b.rescan };
+        let _ = app.emit_to(target.as_str(), "fs-change", ev);
+    })
+}
 
 #[tauri::command]
 fn watch_folder(app: AppHandle, window: WebviewWindow, state: State<WatchState>, roots: State<Roots>, root: String) -> Result<(), String> {
     let label = window.label().to_string();
     roots.0.lock().unwrap().insert(label.clone(), PathBuf::from(&root));
-    let target = label.clone();
-    let mut debouncer = new_debouncer(Duration::from_millis(150), move |res: DebounceEventResult| {
-        if let Ok(events) = res {
-            let paths: Vec<String> = events.iter().map(|e| e.path.to_string_lossy().to_string()).collect();
-            let _ = app.emit_to(target.as_str(), "fs-change", paths);
-        }
-    })
-    .map_err(|e| e.to_string())?;
-    debouncer
-        .watcher()
-        .watch(Path::new(&root), RecursiveMode::Recursive)
-        .map_err(|e| e.to_string())?;
-    // 開いたフォルダがリポジトリの途中なら、上にある .git も監視する（コミットやステージでも git の状態を更新するため）
-    if let Some(gd) = git::find_git_dir(Path::new(&root)) {
-        if !gd.starts_with(&root) {
-            let _ = debouncer.watcher().watch(&gd, RecursiveMode::Recursive);
-        }
+    let mut map = state.0.lock().unwrap();
+    let files = map.remove(&label).map(|w| w.files).unwrap_or_default();
+    let w = start_watch(&app, &label, Some(Path::new(&root)), files.clone())?;
+    map.insert(label, WindowWatch { watch: w, files });
+    Ok(())
+}
+
+/// 開いているファイルの一覧を伝える。フォルダの外のファイル（ドロップで開いたものなど）も監視する。
+#[tauri::command]
+fn watch_files(app: AppHandle, window: WebviewWindow, state: State<WatchState>, paths: Vec<String>) -> Result<(), String> {
+    let label = window.label().to_string();
+    let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let mut map = state.0.lock().unwrap();
+    if let Some(w) = map.get_mut(&label) {
+        w.watch.set_files(files.clone());
+        w.files = files;
+    } else if !files.is_empty() {
+        // フォルダを開いていないウィンドウ
+        let w = start_watch(&app, &label, None, files.clone())?;
+        map.insert(label, WindowWatch { watch: w, files });
     }
-    state.0.lock().unwrap().insert(label, debouncer);
     Ok(())
 }
 
@@ -445,7 +535,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_tree,
+            read_dirs,
             read_text,
+            stat_paths,
+            watch_files,
             write_text,
             watch_folder,
             load_session,

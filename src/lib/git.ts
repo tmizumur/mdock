@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { norm } from "./api";
 
 /** M: 変更 / A: 新規（ステージ済み） / U: 未追跡 / C: 競合 / I: 無視 */
@@ -56,7 +57,7 @@ function buildLookup(root: string, list: GitEntry[]): GitLookup {
 
 /**
  * 開いているフォルダの git の状態。ファイルの変更（.git の中の変更＝コミットやステージも含む）のたびに、
- * 少し待ってから読み直す。読み直している間に変更があれば、終わってからもう一度読む。
+ * すぐ（80ms ほどまとめてから）読み直す。読み直している間に変更があれば、終わってからもう一度読む。
  */
 export function useGitStatus(root: string | null, enabled: boolean): GitLookup {
   const [list, setList] = useState<{ root: string; entries: GitEntry[] } | null>(null);
@@ -76,7 +77,11 @@ export function useGitStatus(root: string | null, enabled: boolean): GitLookup {
       running = true;
       try {
         const entries = await gitStatus(root);
-        if (alive) setList(entries ? { root, entries } : null);
+        // 前と同じ結果なら置き換えない（ツリーを描き直さない）
+        if (alive)
+          setList((prev) =>
+            entries && prev && prev.root === root && JSON.stringify(prev.entries) === JSON.stringify(entries) ? prev : entries ? { root, entries } : null,
+          );
       } catch (e) {
         console.warn("git status", e);
       } finally {
@@ -89,14 +94,15 @@ export function useGitStatus(root: string | null, enabled: boolean): GitLookup {
     };
     const schedule = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(run, 400);
+      timer = window.setTimeout(run, 80);
     };
     run();
-    const un = listen<string[]>("fs-change", schedule);
+    // ファイルの変更と同じタイミングで読み直す。ウィンドウに戻ってきたときも（取りこぼし対策）
+    const uns = [listen("fs-change", schedule), getCurrentWindow().onFocusChanged(({ payload }) => payload && schedule())];
     return () => {
       alive = false;
       window.clearTimeout(timer);
-      un.then((f) => f());
+      uns.forEach((u) => u.then((f) => f()));
     };
   }, [root, enabled]);
 

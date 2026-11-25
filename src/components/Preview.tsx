@@ -32,13 +32,19 @@ type Props = {
   onFindResult?: (r: FindResult) => void;
   /** 描画し直したとき（見出しの位置などが変わったとき）に呼ぶ */
   onRendered?: () => void;
+  /** 待たずにすぐ反映する（入力中でないとき。外部での変更をすぐ表示するため） */
+  immediate?: boolean;
 };
 
-/** 入力のたびに描き直さないよう、少し待ってから反映する。ファイルを切り替えたときはすぐ反映。 */
-function useSettledContent(path: string, content: string) {
+/**
+ * 入力のたびに描き直さないよう、少し待ってから反映する。
+ * ファイルを切り替えたとき・入力中でないとき（外部での変更の再読み込みなど）はすぐ反映。
+ */
+function useSettledContent(path: string, content: string, immediate: boolean) {
   const [state, setState] = useState({ path, content });
   useEffect(() => {
-    if (state.path !== path) {
+    if (state.path !== path || immediate) {
+      if (state.path === path && state.content === content) return;
       setState({ path, content });
       return;
     }
@@ -46,8 +52,8 @@ function useSettledContent(path: string, content: string) {
     const delay = content.length > 200_000 ? 400 : content.length > 30_000 ? 200 : 80;
     const t = window.setTimeout(() => setState({ path, content }), delay);
     return () => window.clearTimeout(t);
-  }, [path, content, state]);
-  return state.path === path ? state.content : content;
+  }, [path, content, state, immediate]);
+  return state.path === path && !immediate ? state.content : content;
 }
 
 /** 見出しの id から要素を探す（エンコードの違いを吸収） */
@@ -62,10 +68,10 @@ function findAnchor(root: HTMLElement, raw: string): HTMLElement | null {
 }
 
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */
-function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFindResult, onRendered }: Props) {
+function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFindResult, onRendered, immediate = false }: Props) {
   const ref = useRef<HTMLElement>(null);
   const { settings, dark } = useSettings();
-  const source = useSettledContent(path, content);
+  const source = useSettledContent(path, content, immediate);
   const [mathOn, setMathOn] = useState(mathReady());
   // 描き直した回数（DOM が変わったら検索や見出し位置を計算し直す）
   const [domVersion, setDomVersion] = useState(0);

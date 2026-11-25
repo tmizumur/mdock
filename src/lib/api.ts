@@ -12,6 +12,13 @@ export const readText = (path: string) => invoke<string>("read_text", { path });
 export const writeText = (path: string, content: string) =>
   invoke<void>("write_text", { path, content });
 export const watchFolder = (root: string) => invoke<void>("watch_folder", { root });
+/** 開いているファイルの一覧（フォルダの外のファイルも監視するため） */
+export const watchFiles = (paths: string[]) => invoke<void>("watch_files", { paths });
+/** 変更のあったフォルダだけ読み直す（フォルダごとの中身。消えていれば null） */
+export const readDirs = (dirs: string[], showHidden = false) => invoke<(Entry[] | null)[]>("read_dirs", { dirs, showHidden });
+
+export type Stat = { exists: boolean; is_dir: boolean; mtime: number; size: number };
+export const statPaths = (paths: string[]) => invoke<Stat[]>("stat_paths", { paths });
 
 export const isMarkdown = (name: string) => /\.(md|markdown|mdx)$/i.test(name);
 

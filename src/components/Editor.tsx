@@ -96,9 +96,16 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
   // 外部でファイルが書き換わったときなど、値が変わったら反映する
   useEffect(() => {
     const v = view.current;
-    if (v && v.state.doc.toString() !== value) {
-      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
-    }
+    if (!v) return;
+    const cur = v.state.doc.toString();
+    if (cur === value) return;
+    // 変わった部分だけ置き換える（カーソルとスクロール位置を保つため）
+    let a = 0;
+    const max = Math.min(cur.length, value.length);
+    while (a < max && cur.charCodeAt(a) === value.charCodeAt(a)) a++;
+    let b = 0;
+    while (b < max - a && cur.charCodeAt(cur.length - 1 - b) === value.charCodeAt(value.length - 1 - b)) b++;
+    v.dispatch({ changes: { from: a, to: cur.length - b, insert: value.slice(a, value.length - b) } });
   }, [value]);
 
   return <div className={`editor font-${settings.editorFont}`} ref={host} />;

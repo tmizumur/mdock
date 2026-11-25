@@ -14,7 +14,8 @@ import SettingsDialog from "./components/SettingsDialog";
 import { useGitStatus } from "./lib/git";
 import { ContextMenu, type MenuItem, useUnsavedDialog } from "./components/Dialogs";
 import { DEFAULT_SETTINGS, savedKeys, useSettings } from "./lib/settings";
-import { Entry, cancelQuit, dirname, loadSession, norm, openNewWindow, printWindow, readText, readTree, saveSession, takePendingOpens, watchFolder, writeText } from "./lib/api";
+import { Entry, cancelQuit, dirname, loadSession, norm, openNewWindow, printWindow, readDirs, readText, readTree, saveSession, statPaths, takePendingOpens, watchFiles, watchFolder, writeText } from "./lib/api";
+import { type FsChange, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "./lib/liveReload";
 import { renderAllPending } from "./lib/markdown";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader, useDragPos, useDrag } from "./lib/dnd";
 import { type LayoutNode, type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, presetLayout, removeLeaf, setSizes, splitLeaf } from "./lib/layout";
@@ -65,6 +66,24 @@ const mapPanes = (w: Workspace, fn: (p: PaneState, id: string) => PaneState): Wo
   return { ...w, panes };
 };
 const allTabs = (w: Workspace) => Object.values(w.panes).flatMap((p) => p.tabs);
+/** 開いているファイル（差分の左右も含む、重複なし） */
+const filesOf = (w: Workspace) => [...new Set(allTabs(w).flatMap((t) => (t.kind === "doc" ? [t.path] : [t.left, t.right])))];
+/** すべてのタブに fn を当てる。どのタブも変わらなければ元の w を返す（再描画しない） */
+const mapTabs = (w: Workspace, fn: (t: Tab) => Tab): Workspace => {
+  let any = false;
+  const panes: Record<string, PaneState> = {};
+  for (const [id, p] of Object.entries(w.panes)) {
+    let changed = false;
+    const tabs = p.tabs.map((t) => {
+      const n = fn(t);
+      if (n !== t) changed = true;
+      return n;
+    });
+    panes[id] = changed ? { ...p, tabs } : p;
+    any ||= changed;
+  }
+  return any ? { ...w, panes } : w;
+};
 /** タブを取り除いた後の、前面のタブの位置 */
 const activeAfterRemove = (active: number, removedAt: number, len: number) =>
   Math.max(0, removedAt < active ? active - 1 : Math.min(active, len - 1));
@@ -85,7 +104,13 @@ function dropIfEmpty(w: Workspace, id: string): { w: Workspace; neighbor?: strin
 export default function App() {
   const [ready, setReady] = useState(false);
   const [root, setRoot] = useState<string | null>(null);
-  const [tree, setTree] = useState<Entry[]>([]);
+  const [tree, setTreeState] = useState<Entry[]>([]);
+  /** ツリーの最新の状態（非同期の部分更新で、古いツリーに上書きしないため） */
+  const treeRef = useRef<Entry[]>([]);
+  const setTree = useCallback((t: Entry[]) => {
+    treeRef.current = t;
+    setTreeState(t);
+  }, []);
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
   const [activeIdx, setActiveIdx] = useState("p0");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -268,9 +293,10 @@ export default function App() {
       ...p,
       tabs: p.tabs.map((x): Tab => {
         if (x.kind === "doc" && x.path === t.path) {
-          if (x.id === tabId) return { ...x, saved: text };
-          if (x.content === x.saved) return { ...x, content: text, saved: text };
-          return { ...x, saved: text };
+          const clear = { external: undefined, deleted: false };
+          if (x.id === tabId) return { ...x, saved: text, ...clear };
+          if (x.content === x.saved) return { ...x, content: text, saved: text, ...clear };
+          return { ...x, saved: text, ...clear };
         }
         if (x.kind === "diff" && (x.left === t.path || x.right === t.path)) {
           return { ...x, ...(x.left === t.path ? { leftText: text } : {}), ...(x.right === t.path ? { rightText: text } : {}) };
@@ -619,54 +645,202 @@ export default function App() {
     getCurrentWindow().setTitle(name ? `${name} — Mdock` : "Mdock").catch(() => {});
   }, [root]);
 
-  // ファイル変更の監視: 開いているファイルは再読み込み、ツリーも更新
-  useEffect(() => {
-    if (!root) return;
-    let treeTimer: number | undefined;
-    const un = listen<string[]>("fs-change", async (ev) => {
-      const changed = new Set(ev.payload.map(norm));
-      const paths = new Set<string>();
-      for (const t of allTabs(wsRef.current)) {
-        if (t.kind === "doc") paths.add(t.path);
-        else paths.add(t.left).add(t.right);
-      }
+  // ---- 外部（AI・ほかのエディタ・git など）での変更の反映 ----
+
+  /** パスごとの読み込みの世代（後から始めた読み込みの結果を優先し、古い結果で上書きしない） */
+  const readGen = useRef(new Map<string, number>());
+
+  /**
+   * 開いているタブを読み直す（裏のタブ・ほかのペインも）。
+   * 未保存の変更が無ければそのまま差し替え、あれば上書きせずに「外部で変更されました」を出す。
+   * 削除されたら「削除されました」を出し、同名で作り直されたら戻す。名前の変更・移動も、同じ内容のファイルがあれば追う。
+   */
+  const reloadTabs = useCallback(
+    async (change: FsChange) => {
+      const match = changeMatcher(change);
+      const targets = filesOf(wsRef.current).filter(match);
+      if (!targets.length) return;
+      const gens = targets.map((p) => {
+        const g = (readGen.current.get(p) ?? 0) + 1;
+        readGen.current.set(p, g);
+        return g;
+      });
+      const results = await Promise.all(targets.map((p) => readText(p).catch(() => null)));
       const fresh = new Map<string, string>();
-      await Promise.all(
-        [...paths]
-          .filter((p) => changed.has(norm(p)))
-          .map((p) =>
-            readText(p).then(
-              (text) => void fresh.set(p, text),
-              () => {}, // 削除された場合などは何もしない
-            ),
-          ),
-      );
-      if (fresh.size) {
-        apply((w) =>
-          mapPanes(w, (p) => ({
-            ...p,
-            tabs: p.tabs.map((t): Tab => {
-              if (t.kind === "diff") {
-                const l = fresh.get(t.left);
-                const r = fresh.get(t.right);
-                return l === undefined && r === undefined ? t : { ...t, leftText: l ?? t.leftText, rightText: r ?? t.rightText };
-              }
-              const text = fresh.get(t.path);
-              if (text === undefined || text === t.saved) return t;
-              // 未保存の編集がある場合は上書きしない
-              return t.content === t.saved ? { ...t, content: text, saved: text } : t;
-            }),
-          })),
-        );
+      const missing: string[] = [];
+      targets.forEach((p, i) => {
+        if (readGen.current.get(p) !== gens[i]) return; // もっと新しい読み込みが走っている
+        const r = results[i];
+        if (r === null) missing.push(p);
+        else fresh.set(p, r);
+      });
+      // 読めなかったもの: 本当に消えたかを確かめる（権限などで読めないだけなら何もしない）
+      let gone: string[] = [];
+      if (missing.length) {
+        const st = await statPaths(missing).catch(() => null);
+        gone = st ? missing.filter((_, i) => !st[i]?.exists) : [];
       }
-      window.clearTimeout(treeTimer);
-      treeTimer = window.setTimeout(() => readTree(root, hiddenRef.current).then(setTree).catch(() => {}), 300);
+      // 名前の変更・移動: 同じ変更の中に、消えたファイルと同じ内容のファイルがあれば移動先とみなす
+      const moved = new Map<string, string>();
+      if (gone.length && !change.rescan) {
+        const open = new Set(filesOf(wsRef.current).map(pathKey));
+        const cands = change.paths.filter((c) => !open.has(pathKey(c))).slice(0, 20);
+        for (const g of gone) {
+          const tab = allTabs(wsRef.current).find((t): t is DocTab => t.kind === "doc" && t.path === g);
+          const anc = tab && matchedAncestor(change.paths, g);
+          if (!tab || !anc) continue;
+          const rest = norm(g).slice(norm(anc).length); // フォルダごと動いたときの、その中での位置
+          for (const c of cands) {
+            if (pathKey(c) === pathKey(anc)) continue;
+            const to = norm(c) + rest;
+            if ([...moved.values()].includes(to)) continue;
+            const text = await readText(to).catch(() => null);
+            if (text !== null && text === tab.saved) {
+              moved.set(g, to);
+              break;
+            }
+          }
+        }
+      }
+      if (!fresh.size && !gone.length) return;
+      const goneSet = new Set(gone);
+      apply((w) =>
+        mapTabs(w, (t): Tab => {
+          if (t.kind === "diff") {
+            const l = fresh.get(t.left);
+            const r = fresh.get(t.right);
+            if ((l === undefined || l === t.leftText) && (r === undefined || r === t.rightText)) return t;
+            return { ...t, leftText: l ?? t.leftText, rightText: r ?? t.rightText };
+          }
+          const to = moved.get(t.path);
+          if (to) return { ...t, path: to, deleted: false };
+          if (goneSet.has(t.path)) return t.deleted ? t : { ...t, deleted: true, external: undefined };
+          const text = fresh.get(t.path);
+          if (text === undefined) return t;
+          const settled = !t.deleted && t.external === undefined;
+          if (t.content === t.saved) {
+            // 未保存の変更なし: そのまま差し替える（同じ内容なら何もしない＝描き直さない）
+            if (text === t.saved && settled) return t;
+            return { ...t, content: text, saved: text, deleted: false, external: undefined };
+          }
+          // 未保存の変更あり: 上書きしない
+          if (text === t.content) return { ...t, saved: text, deleted: false, external: undefined }; // 外と同じ内容になった（自分の保存など）
+          if (text === t.saved) return settled ? t : { ...t, deleted: false, external: undefined };
+          return t.external === text && !t.deleted ? t : { ...t, external: text, deleted: false };
+        }),
+      );
+    },
+    [apply],
+  );
+
+  /** ツリーの部分更新の順番待ち（読み直している間に届いた変更は、終わってからまとめて読む） */
+  const treeQueue = useRef({ paths: new Set<string>(), all: false, running: false });
+  /** ツリーを読み直す。変更のあったフォルダだけ読み、全体は必要なときだけ。展開状態・選択・スクロール位置は保たれる */
+  const refreshTreeFor = useCallback(
+    async (change: FsChange) => {
+      const q = treeQueue.current;
+      const r0 = rootRef.current;
+      if (!r0) return;
+      if (change.rescan) q.all = true;
+      else for (const p of change.paths) if (!irrelevantForTree(r0, p, hiddenRef.current)) q.paths.add(p);
+      if (q.running) return;
+      q.running = true;
+      try {
+        while (q.all || q.paths.size) {
+          const root = rootRef.current;
+          if (!root) break;
+          const all = q.all;
+          const paths = [...q.paths];
+          q.all = false;
+          q.paths.clear();
+          let plan: string[] | "all" = "all";
+          if (!all) {
+            const st = await statPaths(paths).catch(() => null);
+            if (st) plan = dirsToReread(root, indexTree(treeRef.current), paths, new Map(paths.map((p, i) => [pathKey(p), st[i]])));
+          }
+          if (rootRef.current !== root) break;
+          if (plan === "all") {
+            const next = await readTree(root, hiddenRef.current).catch(() => [] as Entry[]); // フォルダが消えたら空にする（戻れば読み直す）
+            if (rootRef.current !== root) break;
+            if (!sameEntries(treeRef.current, next)) setTree(next);
+          } else if (plan.length) {
+            const res = await readDirs(plan, hiddenRef.current).catch(() => null);
+            if (rootRef.current !== root) break;
+            if (!res) {
+              q.all = true;
+              continue;
+            }
+            let t = treeRef.current;
+            plan.forEach((d, i) => {
+              const kids = res[i];
+              const n = kids ? spliceTree(t, d, kids) : null;
+              if (n) t = n;
+              else q.all = true; // 見つからない・消えていた → 全体を読み直す
+            });
+            if (t !== treeRef.current) setTree(t);
+          }
+        }
+      } finally {
+        q.running = false;
+      }
+    },
+    [setTree],
+  );
+
+  // 監視からの知らせ（変更から 100ms ほどで届く）
+  useEffect(() => {
+    const un = listen<FsChange>("fs-change", (ev) => {
+      const change = { paths: ev.payload.paths ?? [], rescan: !!ev.payload.rescan };
+      reloadTabs(change);
+      refreshTreeFor(change);
     });
     return () => {
       un.then((f) => f());
-      window.clearTimeout(treeTimer);
     };
-  }, [root]);
+  }, [reloadTabs, refreshTreeFor]);
+
+  // 開いているファイルを監視側に伝える（開いたフォルダの外のファイルも監視するため）
+  const watchKey = filesOf(ws).sort().join("\n");
+  useEffect(() => {
+    if (!ready) return;
+    watchFiles(watchKey ? watchKey.split("\n") : []).catch(() => {});
+  }, [watchKey, ready, root]);
+
+  // 取りこぼし対策: ウィンドウに戻ってきたら、開いているファイル（更新時刻とサイズ）とツリーを確かめ直す
+  const known = useRef(new Map<string, string>());
+  const lastTreeCheck = useRef(0);
+  useEffect(() => {
+    if (!ready) return;
+    const recheck = async () => {
+      const paths = filesOf(wsRef.current);
+      if (paths.length) {
+        const st = await statPaths(paths).catch(() => null);
+        if (st) {
+          const changed = paths.filter((p, i) => {
+            const sig = st[i]?.exists ? `${st[i].mtime}:${st[i].size}` : "gone";
+            const k = pathKey(p);
+            const old = known.current.get(k);
+            known.current.set(k, sig);
+            return old !== sig;
+          });
+          if (changed.length) reloadTabs({ paths: changed, rescan: false });
+        }
+      }
+      const now = Date.now();
+      if (now - lastTreeCheck.current > 2000) {
+        lastTreeCheck.current = now;
+        refreshTreeFor({ paths: [], rescan: true });
+      }
+    };
+    recheck(); // 今の状態を覚えておく
+    const un = getCurrentWindow().onFocusChanged(({ payload }) => payload && recheck());
+    const onVis = () => document.visibilityState === "visible" && recheck();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      un.then((f) => f());
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [ready, reloadTabs, refreshTreeFor]);
 
   // フォルダ・ファイルのドラッグ&ドロップ
   useEffect(() => {
@@ -887,6 +1061,12 @@ export default function App() {
         const t = p && activeTab(p);
         if (t) saveTab(t.id);
       }}
+      onReloadExternal={() =>
+        updateActiveTab(i, (t) =>
+          t.kind === "doc" && t.external !== undefined ? { ...t, content: t.external, saved: t.external, external: undefined } : t,
+        )
+      }
+      onKeepMine={() => updateActiveTab(i, (t) => (t.kind === "doc" && t.external !== undefined ? { ...t, saved: t.external, external: undefined } : t))}
       onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab })}
       onPrint={() => printPane(i)}
       printTarget={activeIdx === i}
