@@ -1,3 +1,5 @@
+mod git;
+
 use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult, Debouncer};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -243,8 +245,23 @@ fn watch_folder(app: AppHandle, window: WebviewWindow, state: State<WatchState>,
         .watcher()
         .watch(Path::new(&root), RecursiveMode::Recursive)
         .map_err(|e| e.to_string())?;
+    // 開いたフォルダがリポジトリの途中なら、上にある .git も監視する（コミットやステージでも git の状態を更新するため）
+    if let Some(gd) = git::find_git_dir(Path::new(&root)) {
+        if !gd.starts_with(&root) {
+            let _ = debouncer.watcher().watch(&gd, RecursiveMode::Recursive);
+        }
+    }
     state.0.lock().unwrap().insert(label, debouncer);
     Ok(())
+}
+
+// ---- git の変更状態 ----
+
+/// 開いているフォルダの git の状態。リポジトリでない・git が無いときは null。
+/// 大きなリポジトリでも画面を止めないよう、別スレッドで実行する。
+#[tauri::command]
+async fn git_status(root: String) -> Result<Option<Vec<git::GitEntry>>, String> {
+    tauri::async_runtime::spawn_blocking(move || git::status(&root)).await.map_err(|e| e.to_string())
 }
 
 // ---- 複数ウィンドウ ----
@@ -332,6 +349,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
     let app_menu = SubmenuBuilder::new(app, "Mdock")
         .about(None)
+        .separator()
+        .item(&MenuItemBuilder::with_id("settings", "設定…").accelerator("CmdOrCtrl+,").build(app)?)
         .separator()
         .services()
         .separator()
@@ -439,7 +458,8 @@ pub fn run() {
             open_new_window,
             cancel_quit,
             print_window,
-            take_pending_opens
+            take_pending_opens,
+            git_status
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -5,13 +5,15 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Columns2, Columns3, Rows2, Square } from "lucide-react";
+import { Columns2, Columns3, Rows2, Settings as SettingsIcon, Square } from "lucide-react";
 import FileTree from "./components/FileTree";
 import UpdateButton from "./components/UpdateButton";
 import Pane, { PaneCommand } from "./components/Pane";
 import ViewMenu from "./components/ViewMenu";
+import SettingsDialog from "./components/SettingsDialog";
+import { useGitStatus } from "./lib/git";
 import { ContextMenu, type MenuItem, useUnsavedDialog } from "./components/Dialogs";
-import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
+import { DEFAULT_SETTINGS, savedKeys, useSettings } from "./lib/settings";
 import { Entry, cancelQuit, dirname, loadSession, norm, openNewWindow, printWindow, readText, readTree, saveSession, takePendingOpens, watchFolder, writeText } from "./lib/api";
 import { renderAllPending } from "./lib/markdown";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader, useDragPos, useDrag } from "./lib/dnd";
@@ -86,11 +88,13 @@ export default function App() {
   const [tree, setTree] = useState<Entry[]>([]);
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
   const [activeIdx, setActiveIdx] = useState("p0");
-  const [mdOnly, setMdOnly] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [commands, setCommands] = useState<Record<string, PaneCommand>>({});
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const { settings, update: updateSettings } = useSettings();
+  const mdOnly = settings.mdOnly;
+  const git = useGitStatus(root, settings.gitStatus);
   const { ask, dialog } = useUnsavedDialog();
   /** サイドバーとペイン全体の幅 */
   const sidebarLayout = useRef<Session["sidebar"]>(undefined);
@@ -476,7 +480,8 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const s = await restoreSession();
-      setMdOnly(s.mdOnly);
+      // 「.md のみ」は以前ウィンドウごとの状態に保存していた。設定にまだなければ引き継ぐ
+      if (!savedKeys.has("mdOnly") && s.mdOnly === false) updateSettings({ mdOnly: false });
       sidebarLayout.current = s.sidebar;
       if (s.root) {
         try {
@@ -757,6 +762,8 @@ export default function App() {
     };
   }, [ready]);
 
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+
   const toggleMode = (i: string) =>
     updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, mode: t.mode === "view" ? "edit" : "view" } : t));
 
@@ -773,6 +780,7 @@ export default function App() {
     },
     "close-tab": closeActiveTab,
     print: () => printPane(activeRef.current),
+    settings: () => setSettingsOpen(true),
   };
   useEffect(() => {
     const un = getCurrentWindow().listen<string>("menu", (ev) => actions.current[ev.payload]?.());
@@ -787,6 +795,12 @@ export default function App() {
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
       const i = livePane(activeRef.current);
+      if (k === "," && !e.shiftKey) {
+        // ⌘,: 設定（メニューのショートカットが先に受け取ることが多いが、念のため）
+        e.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
       if (e.shiftKey && (k === "[" || k === "{" || k === "]" || k === "}")) {
         // ⌘⇧[ / ⌘⇧] でタブを移動
         e.preventDefault();
@@ -930,6 +944,9 @@ export default function App() {
         {error && <span className="error">{error}</span>}
         <UpdateButton beforeRestart={flush} />
         <ViewMenu />
+        <button className="btn icon-only" onClick={() => setSettingsOpen(true)} title="設定 (⌘,)" aria-label="設定">
+          <SettingsIcon size={15} />
+        </button>
         <div className="segmented icons" role="group" aria-label="レイアウトのリセット">
           {LAYOUTS.map(([l, label, Icon]) => (
             <button
@@ -959,7 +976,7 @@ export default function App() {
               <div className="sidebar-head">
                 <span>ファイル</span>
                 <label title="Markdown ファイルだけを表示">
-                  <input type="checkbox" checked={mdOnly} onChange={(e) => setMdOnly(e.target.checked)} /> .md のみ
+                  <input type="checkbox" checked={mdOnly} onChange={(e) => updateSettings({ mdOnly: e.target.checked })} /> .md のみ
                 </label>
               </div>
               {root ? (
@@ -973,6 +990,7 @@ export default function App() {
                   onChanged={refreshTree}
                   onRenamed={onRenamed}
                   onError={setError}
+                  git={git}
                 />
               ) : (
                 <div className="tree-empty">
@@ -991,6 +1009,7 @@ export default function App() {
       <DragGhost />
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
       {dialog}
+      {settingsOpen && <SettingsDialog onClose={closeSettings} />}
     </div>
   );
 }
