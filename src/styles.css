@@ -79,7 +79,11 @@ input:not(.tree-input, .find-bar input, .cm-textfield):focus-visible, textarea:f
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
-.app { display: flex; flex-direction: column; height: 100%; border-radius: var(--radius-window); overflow: hidden; }
+.app {
+  display: flex; flex-direction: column; height: 100%; border-radius: var(--radius-window); overflow: hidden;
+  /* コードも本文の文字サイズ（⌘+ / ⌘-）に合わせる（標準の 15px のとき 13px） */
+  --code-font-size: calc(var(--doc-font-size) * 13 / 15);
+}
 
 /* ウィンドウ上部のバー */
 .toolbar {
@@ -289,6 +293,9 @@ button.outline-toggle:hover { color: var(--fg); }
 .markdown-body { max-width: 860px; margin: 0 auto; padding: 24px 40px 80px; line-height: var(--doc-line-height); font-size: var(--doc-font-size); word-wrap: break-word; }
 .markdown-body.width-wide { max-width: 1200px; }
 .markdown-body.width-full { max-width: none; }
+/* 狭いペインでは本文の左右の余白を縮める */
+@container (max-width: 560px) { .markdown-body { padding-inline: 20px; } }
+@container (max-width: 380px) { .markdown-body { padding-inline: 12px; } }
 @media screen {
   .pane-body > .markdown-body { contain: paint; }
 }
@@ -382,6 +389,14 @@ button.outline-toggle:hover { color: var(--fg); }
 .find-count { min-width: 64px; text-align: right; font-size: 12px; color: var(--fg-muted); padding-right: 4px; font-variant-numeric: tabular-nums; }
 .find-count.none { color: var(--danger); }
 .find-bar .icon-btn { display: inline-flex; padding: 3px; }
+/* 狭いペインでは検索バーをペインの幅に収める */
+.find-bar { max-width: calc(100% - 32px); }
+.find-bar input { min-width: 48px; flex: 0 1 200px; }
+@container (max-width: 400px) {
+  .find-bar { left: 8px; right: 16px; }
+  .find-bar input { flex: 1 1 auto; width: 0; }
+  .find-count { min-width: 0; }
+}
 
 /* 読んでいる位置（右端の細い帯） */
 .ruler {
@@ -434,6 +449,8 @@ button.outline-toggle:hover { color: var(--fg); }
   flex: 1; min-width: 0; height: 100%; overflow: auto hidden; scrollbar-width: none;
 }
 .tab-strip::-webkit-scrollbar { display: none; }
+/* 分割しているとき、操作中のペインのタブバーの下線を差し色に（控えめに） */
+.split-group .pane.is-active .tabbar { border-bottom-color: color-mix(in srgb, var(--accent) 65%, var(--border)); }
 .pane-modes { flex-shrink: 0; color: var(--fg-muted); }
 .pane-modes button { display: inline-flex; align-items: center; white-space: nowrap; }
 .pane-modes svg { display: none; }

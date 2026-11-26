@@ -187,6 +187,7 @@ export default function App() {
                     root={root}
                     entries={tree}
                     openPaths={visiblePaths}
+                  activePath={currentTab?.kind === "doc" ? currentTab.path : undefined}
                     onOpen={onTreeOpen}
                     onLoadDirectory={loadDirectory}
                     onChanged={refreshTree}

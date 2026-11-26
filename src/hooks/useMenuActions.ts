@@ -28,12 +28,21 @@ export function useMenuActions(
     print: () => printPane(activeRef.current),
     settings: () => setSettingsOpen(true),
   };
+  // メニューのキー（アクセラレータ）とアプリのキー処理の両方が同じキーを受け取っても、1回だけ実行する
+  const last = useRef<{ id: string; at: number; source: "key" | "menu" } | null>(null);
+  const run = useRef((id: string, source: "key" | "menu") => {
+    const now = performance.now();
+    const l = last.current;
+    if (l && l.id === id && l.source !== source && now - l.at < 400) return;
+    last.current = { id, at: now, source };
+    actions.current[id]?.();
+  }).current;
   useEffect(() => {
-    const un = getCurrentWindow().listen<string>("menu", (ev) => actions.current[ev.payload]?.());
+    const un = getCurrentWindow().listen<string>("menu", (ev) => run(ev.payload, "menu"));
     return () => {
       un.then((f) => f());
     };
-  }, []);
+  }, [run]);
 
-  return actions;
+  return { actions, run };
 }
