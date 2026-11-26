@@ -295,6 +295,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 12px; }
 .markdown-body th { background: var(--bg-side); }
 .markdown-body img { max-width: 100%; }
+.markdown-body :is(img:not(a img), .mermaid-block svg:not(svg svg, a svg)) { cursor: zoom-in; }
 .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
 .markdown-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
 .markdown-body input[type="checkbox"],
@@ -466,6 +467,20 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   animation: dialog-open var(--motion-dialog) var(--ease-out);
 }
 dialog::backdrop { background: rgba(0, 0, 0, 0.42); }
+.lightbox {
+  position: fixed; inset: 0; margin: 0; padding: 0; border: 0; overflow: hidden;
+  width: 100%; height: 100%; max-width: none; max-height: none; background: transparent;
+}
+.lightbox::backdrop { background: color-mix(in srgb, var(--bg) 88%, transparent); }
+.lightbox > img {
+  position: absolute; top: 50%; left: 50%; cursor: grab; touch-action: none; user-select: none;
+}
+.lightbox > img:active { cursor: grabbing; }
+.lightbox .lightbox-close {
+  position: absolute; top: 16px; right: 16px; display: grid; place-items: center;
+  width: 36px; height: 36px; color: var(--fg); background: var(--bg-elev);
+}
+.lightbox .lightbox-close:hover { background: var(--bg-hover); }
 @keyframes dialog-open {
   from { opacity: 0; transform: scale(0.97); }
 }
