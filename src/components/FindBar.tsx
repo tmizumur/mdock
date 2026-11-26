@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
+import { FIND_LIMIT } from "../lib/find";
+
+const num = new Intl.NumberFormat("ja-JP");
 
 type Props = {
   query: string;
@@ -40,7 +43,7 @@ export default function FindBar({ query, index, count, focusSignal, onChange, on
         }}
       />
       <span className={`find-count ${query && !count ? "none" : ""}`}>
-        {query ? (count ? `${pos + 1} / ${count}${count >= 5000 ? "+" : ""}` : "見つかりません") : ""}
+        {query ? (count ? `${num.format(pos + 1)} / ${num.format(count)}${count >= FIND_LIMIT ? "+" : ""}` : "見つかりません") : ""}
       </span>
       <button className="icon-btn" onClick={() => onStep(-1)} disabled={!count} title="前へ (⇧Enter)">
         <ChevronUp size={15} />

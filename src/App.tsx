@@ -203,7 +203,7 @@ export default function App() {
                     </div>
                   </>
                 )}
-                <Outline outline={activeOutline} />
+                <Outline outline={activeOutline} tabKey={currentTab?.id} />
               </div>
               {searchOpen && (
                 <FolderSearch key={root ?? ""} root={root} onClose={closeSearch}

@@ -222,16 +222,30 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   display: flex; flex-direction: column; flex: 0 1 32%; min-height: 0; max-height: 32%;
   border-top: 1px solid var(--border); padding: 0 6px;
 }
-.outline .sidebar-label { flex-shrink: 0; padding: 9px 6px; }
+.outline-head { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.outline-head .sidebar-label { flex-shrink: 0; padding: 9px 6px; }
+.outline-head .icon-btn { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; margin-left: auto; }
+.outline-filter {
+  flex: 1; min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-small);
+  background: var(--bg-elev); color: var(--fg); font: inherit; font-size: 12px; outline: none;
+}
+.outline-filter:focus { border-color: var(--accent); }
 .outline-list { list-style: none; margin: 0; padding: 0 0 6px; overflow: auto; }
-.outline-list button {
-  display: block; width: 100%; height: 26px; padding: 0 8px; text-align: left;
+.outline-list li { display: flex; align-items: center; min-width: 0; }
+.outline-list li.dim .outline-item { color: var(--fg-faint); }
+.outline-toggle {
+  flex: 0 0 16px; display: grid; place-items: center; width: 16px; height: 26px; padding: 0;
+  border: 0; background: none; color: var(--fg-faint);
+}
+button.outline-toggle:hover { color: var(--fg); }
+.outline-item {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px 0 2px; text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   border: 0; border-radius: var(--radius-row); background: none; color: var(--fg-muted);
   font-size: 12.5px; transition: var(--color-transition);
 }
-.outline-list button:hover { background: var(--bg-hover); }
-.outline-list button[aria-current] { color: var(--accent); font-weight: 600; }
+.outline-item:hover { background: var(--bg-hover); }
+.outline-item[aria-current] { color: var(--accent); font-weight: 600; }
 .outline-empty { margin: 0; padding: 3px 8px; color: var(--fg-faint); font-size: 12px; }
 
 /* ペイン */
@@ -471,6 +485,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .split-col { flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; }
 .split-col + .split-col { border-left: 1px solid var(--border); }
 .split-col.editor-body { height: 100%; }
+.split-preview:focus, .split-preview:focus-visible { outline: none; }
 
 /* 差分 */
 .diff { font-size: 12.5px; }
