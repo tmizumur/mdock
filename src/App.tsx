@@ -13,7 +13,7 @@ import WindowBar from "./components/WindowBar";
 import SettingsDialog from "./components/SettingsDialog";
 import { useGitStatus } from "./lib/git";
 import { ContextMenu, type MenuItem, useUnsavedDialog } from "./components/Dialogs";
-import { DEFAULT_SETTINGS, savedKeys, useSettings } from "./lib/settings";
+import { DEFAULT_SETTINGS, useSettings } from "./lib/settings";
 import { Entry, cancelQuit, dirname, loadSession, norm, openNewWindow, printWindow, readDirs, readText, readTree, saveSession, statPaths, takePendingOpens, watchFiles, watchFolder, writeText } from "./lib/api";
 import { type FsChange, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "./lib/liveReload";
 import { renderAllPending } from "./lib/markdown";
@@ -111,7 +111,6 @@ export default function App() {
   const [commands, setCommands] = useState<Record<string, PaneCommand>>({});
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const { settings, update: updateSettings } = useSettings();
-  const mdOnly = settings.mdOnly;
   const git = useGitStatus(root, settings.gitStatus, settings.statusBar);
   const [outline, setOutline] = useState<PaneOutline>();
   const [watchedRoot, setWatchedRoot] = useState<string | null>(null);
@@ -144,10 +143,6 @@ export default function App() {
   const rootRef = useRef(root);
   rootRef.current = root;
   const activeRef = useRef(activeIdx);
-  const mdOnlyRef = useRef(mdOnly);
-  mdOnlyRef.current = mdOnly;
-  const hiddenRef = useRef(settings.showHidden);
-  hiddenRef.current = settings.showHidden;
 
   const order = leaves(ws.layout);
 
@@ -262,7 +257,7 @@ export default function App() {
   /** フォルダのツリーを読み込み、監視を開始する */
   const openFolder = useCallback(async (dir: string, replaceTabs = false) => {
     try {
-      const entries = await readTree(dir, hiddenRef.current);
+      const entries = await readTree(dir);
       if (replaceTabs) {
         if (!(await confirmDirty(allTabs(wsRef.current)))) return;
         clearTabs();
@@ -511,12 +506,10 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const s = await restoreSession();
-      // 「.md のみ」は以前ウィンドウごとの状態に保存していた。設定にまだなければ引き継ぐ
-      if (!savedKeys.has("mdOnly") && s.mdOnly === false) updateSettings({ mdOnly: false });
       sidebarLayout.current = s.sidebar;
       if (s.root) {
         try {
-          setTree(await readTree(s.root, hiddenRef.current));
+          setTree(await readTree(s.root));
           setRoot(s.root);
           startWatchingFolder(s.root).catch(() => {});
         } catch {
@@ -581,7 +574,6 @@ export default function App() {
       panes,
       layout: w.layout,
       activePane: activeRef.current,
-      mdOnly: mdOnlyRef.current,
       ...(sidebarLayout.current ? { sidebar: sidebarLayout.current } : {}),
     };
     return saveSession(JSON.stringify(s)).catch((e) => console.warn("save session", e));
@@ -593,7 +585,7 @@ export default function App() {
 
   useEffect(() => {
     if (ready) schedulePersist();
-  }, [ready, root, ws, activeIdx, mdOnly, schedulePersist]);
+  }, [ready, root, ws, activeIdx, schedulePersist]);
 
   const flush = useCallback(async () => {
     window.clearTimeout(saveTimer.current);
@@ -747,7 +739,7 @@ export default function App() {
       const r0 = rootRef.current;
       if (!r0) return;
       if (change.rescan) q.all = true;
-      else for (const p of change.paths) if (!irrelevantForTree(r0, p, hiddenRef.current)) q.paths.add(p);
+      else for (const p of change.paths) if (!irrelevantForTree(r0, p)) q.paths.add(p);
       if (q.running) return;
       q.running = true;
       try {
@@ -765,11 +757,11 @@ export default function App() {
           }
           if (rootRef.current !== root) break;
           if (plan === "all") {
-            const next = await readTree(root, hiddenRef.current).catch(() => [] as Entry[]); // フォルダが消えたら空にする（戻れば読み直す）
+            const next = await readTree(root).catch(() => [] as Entry[]); // フォルダが消えたら空にする（戻れば読み直す）
             if (rootRef.current !== root) break;
             if (!sameEntries(treeRef.current, next)) setTree(next);
           } else if (plan.length) {
-            const res = await readDirs(plan, hiddenRef.current).catch(() => null);
+            const res = await readDirs(plan).catch(() => null);
             if (rootRef.current !== root) break;
             if (!res) {
               q.all = true;
@@ -873,13 +865,8 @@ export default function App() {
 
   const refreshTree = useCallback(() => {
     const r = rootRef.current;
-    if (r) readTree(r, hiddenRef.current).then(setTree).catch(() => {});
+    if (r) readTree(r).then(setTree).catch(() => {});
   }, []);
-
-  // 隠しファイルの表示を切り替えたらツリーを読み直す
-  useEffect(() => {
-    if (ready) refreshTree();
-  }, [settings.showHidden, ready, refreshTree]);
 
   /** ツリーで名前を変えたら、そのファイル（フォルダならその中）を開いているタブのパスも直す */
   const onRenamed = (from: string, to: string) => {
@@ -1163,8 +1150,6 @@ export default function App() {
                   key={root}
                   root={root}
                   entries={tree}
-                  mdOnly={mdOnly}
-                  onFilter={(mdOnly) => updateSettings({ mdOnly })}
                   openPaths={visiblePaths}
                   onOpen={onTreeOpen}
                   onChanged={refreshTree}
@@ -1174,7 +1159,7 @@ export default function App() {
                 />
               ) : (
                 <>
-                  <ExplorerControls mdOnly={mdOnly} onFilter={(mdOnly) => updateSettings({ mdOnly })} />
+                  <ExplorerControls />
                   <div className="tree-empty">
                     <button className="btn" onClick={pickFolder}>フォルダを開く</button>
                     <small>ここにフォルダをドロップしても開けます</small>

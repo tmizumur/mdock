@@ -36,13 +36,13 @@ export function matchedAncestor(changed: string[], path: string): string | undef
 /** ツリーに出さないフォルダ（Rust の SKIP_DIRS と同じ） */
 const SKIP = new Set(["node_modules", "target", "dist", "build", ".git", ".venv", "__pycache__", ".next", ".cache", ".turbo", ".svn", ".hg"]);
 
-/** ツリーの表示に関係しない変更か（.git や node_modules の中、隠しファイルを出さないときの隠しファイル） */
-export function irrelevantForTree(root: string, path: string, showHidden: boolean): boolean {
+/** ツリーの表示に関係しない変更か（対象フォルダの外、除外フォルダとその中身、.DS_Store） */
+export function irrelevantForTree(root: string, path: string): boolean {
   const r = pathKey(root);
   const k = pathKey(path);
   if (k !== r && !k.startsWith(r + "/")) return true;
   const segs = norm(path).slice(norm(root).replace(/\/+$/, "").length + 1).split("/").filter(Boolean);
-  return segs.some((s) => SKIP.has(s) || s === ".DS_Store" || (!showHidden && s.startsWith(".")));
+  return segs.some((s) => SKIP.has(s) || s === ".DS_Store");
 }
 
 export function indexTree(tree: Entry[]): Map<string, Entry> {

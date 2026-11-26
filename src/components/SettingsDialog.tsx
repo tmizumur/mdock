@@ -170,8 +170,6 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "files" && (
             <>
-              <Toggle k="mdOnly" label="Markdown ファイルだけを表示" note=".md / .markdown / .mdx 以外と、それを含まないフォルダを隠します" />
-              <Toggle k="showHidden" label="隠しファイルを表示" note=". で始まるファイル・フォルダも表示します" />
               <Toggle
                 k="gitStatus"
                 label="ツリーに Git の変更状態を表示"

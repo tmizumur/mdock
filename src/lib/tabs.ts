@@ -68,7 +68,6 @@ export type Session = {
   /** 分割ツリー（比率を含む） */
   layout: LayoutNode;
   activePane: string;
-  mdOnly: boolean;
   /** サイドバーとペイン全体の幅（react-resizable-panels の Layout） */
   sidebar?: Record<string, number>;
 };
@@ -79,7 +78,6 @@ export const defaultSession = (): Session => ({
   panes: { p0: { tabs: [], active: 0 } },
   layout: { type: "pane", id: "p0" },
   activePane: "p0",
-  mdOnly: true,
 });
 
 /** 版 3: 最大 3 ペインを決まった形（1画面 / 左右 / 上下 / 3分割）で並べていた */
@@ -89,7 +87,7 @@ type V3 = {
   panes: SavedPane[];
   activeIdx: number;
   layout: PresetLayout;
-  mdOnly: boolean;
+  mdOnly?: boolean;
   layouts: Record<string, Record<string, number>>;
 };
 
@@ -116,7 +114,6 @@ function fromV3(s: V3): Session {
     panes,
     layout: validLayout(layout) ?? layout,
     activePane: ids[Math.min(Math.max(0, s.activeIdx ?? 0), n - 1)],
-    mdOnly: s.mdOnly ?? true,
     ...(side > 0 ? { sidebar: { sidebar: side, panes: 100 - side } } : {}),
   };
 }
@@ -128,7 +125,7 @@ type V2 = {
   panes: V2Pane[];
   activeIdx: number;
   split: boolean;
-  mdOnly: boolean;
+  mdOnly?: boolean;
   layouts: { split?: Record<string, number>; single?: Record<string, number> };
 };
 
@@ -150,7 +147,6 @@ export function migrateSession(s: any): Session | null {
       panes,
       layout,
       activePane: ids.includes(s.activePane) ? s.activePane : ids[0],
-      mdOnly: s.mdOnly ?? true,
       ...(s.sidebar && typeof s.sidebar === "object" ? { sidebar: s.sidebar } : {}),
     };
   }
@@ -172,7 +168,6 @@ export function migrateSession(s: any): Session | null {
       panes,
       activeIdx: v2.split ? v2.activeIdx ?? 0 : 0,
       layout: v2.split === false ? "single" : "cols2",
-      mdOnly: v2.mdOnly ?? true,
       layouts,
     });
   }
@@ -182,7 +177,6 @@ export function migrateSession(s: any): Session | null {
       version: 2,
       root: s.root ?? null,
       split: s.split,
-      mdOnly: s.mdOnly,
       activeIdx: 0,
       layouts: {},
       panes: s.paths.map((path: string | null) => ({ path, mode: "view", scroll: 0 })),

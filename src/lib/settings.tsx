@@ -13,10 +13,6 @@ export type Settings = {
   width: DocWidth;
   /** エディタとプレビューのコードブロックを折り返す */
   wrap: boolean;
-  /** ツリーに . から始まるファイル・フォルダも出す */
-  showHidden: boolean;
-  /** ツリーに Markdown ファイルだけを出す */
-  mdOnly: boolean;
   /** 画面のアニメーションを表示する */
   animations: boolean;
   /** ウィンドウ下部にステータスバーを表示する */
@@ -33,8 +29,6 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 15,
   width: "normal",
   wrap: true,
-  showHidden: false,
-  mdOnly: true,
   animations: true,
   statusBar: true,
   editorFont: "mono",
@@ -46,9 +40,6 @@ export const FONT_MAX = 28;
 
 export const WIDTH_LABEL: Record<DocWidth, string> = { normal: "標準", wide: "広い", full: "全幅" };
 export const EDITOR_FONT_LABEL: Record<EditorFont, string> = { mono: "等幅", sans: "ゴシック", serif: "明朝" };
-
-/** settings.json に保存されていた項目（新しく増えた項目を、以前の保存場所から引き継ぐのに使う） */
-export const savedKeys = new Set<string>();
 
 type Ctx = {
   settings: Settings;
@@ -69,9 +60,7 @@ export async function readSettings(): Promise<Settings> {
   try {
     const raw = await loadSettings();
     if (raw) {
-      const saved = JSON.parse(raw);
-      Object.keys(saved).forEach((k) => savedKeys.add(k));
-      return withDefaults(saved);
+      return withDefaults(JSON.parse(raw));
     }
   } catch (e) {
     console.warn("settings", e);
