@@ -11,7 +11,7 @@
   --fg-faint: #8B9099;
   --accent: #8AA4FF;
   --accent-soft: rgba(138, 164, 255, 0.12);
-  --scrollbar-thumb: color-mix(in srgb, var(--fg-faint) 65%, transparent);
+  --scrollbar-thumb: color-mix(in srgb, var(--fg-faint) 45%, transparent);
   --tree-selected: rgba(138, 164, 255, 0.14);
   --git-modified: #E5C07B;
   --git-added: #7FD39A;
@@ -64,8 +64,11 @@ html, body, #root { margin: 0; height: 100%; overflow: hidden; }
 @supports selector(::-webkit-scrollbar) {
   :root { scrollbar-color: auto; }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: var(--radius-small); }
-  ::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb); border: 2px solid transparent;
+    background-clip: padding-box; border-radius: var(--radius-small);
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg-muted) 70%, transparent); }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 }
 
@@ -107,12 +110,13 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   background: var(--bg-elev); font-size: 12.5px;
 }
 .btn:hover:not(:disabled) { background: var(--bg-hover); }
-.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:disabled { color: var(--fg-faint); cursor: default; }
 .icon-btn {
   border: none; background: none; font-size: 16px; line-height: 1; padding: 2px 6px;
   color: var(--fg-muted); border-radius: var(--radius-small);
 }
-.icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.icon-btn:disabled { color: var(--fg-faint); cursor: default; }
 
 .segmented { display: inline-flex; padding: 2px; gap: 2px; border-radius: var(--radius-segment); background: var(--bg-elev); }
 .segmented button { border: none; background: transparent; border-radius: var(--radius-small); padding: 3px 8px; font-size: 12.5px; }
@@ -170,15 +174,15 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .tree-row .tree-icon { color: var(--fg-faint); }
 .tree-row:is(.active, .selected) .tree-icon { color: var(--accent); }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
-.tree-row.dim .tree-icon { opacity: 0.75; }
+.tree-row.dim:not(.git-I) .tree-icon { opacity: 0.75; }
 /* git の変更状態: ファイルは名前の色と記号、フォルダは点 */
 .git-badge { margin-left: auto; padding-left: 6px; flex-shrink: 0; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .git-dot { margin: 0 3px 0 auto; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.8; }
 .tree-row.file.git-M .tree-name, .tree-row.git-M :is(.git-badge, .git-dot) { color: var(--git-modified); }
 .tree-row.file:is(.git-A, .git-U) .tree-name, .tree-row:is(.git-A, .git-U) :is(.git-badge, .git-dot) { color: var(--git-added); }
 .tree-row.file.git-C .tree-name, .tree-row.git-C :is(.git-badge, .git-dot) { color: var(--danger); }
-.tree-row.git-I .tree-name { color: var(--fg-faint); }
-.tree-row.git-I { opacity: 0.6; }
+.tree-row.git-I :is(.tree-name, .tree-icon, .chev) { color: var(--fg-faint); }
+.tree-row.git-I:is(:hover, .selected, .active) :is(.tree-name, .tree-icon, .chev) { color: var(--fg-muted); }
 .tree-empty { flex: 1; overflow: auto; padding: 16px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; font-size: 13px; }
 
 /* アウトライン */
@@ -276,7 +280,17 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .markdown-body img { max-width: 100%; }
 .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
 .markdown-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
-.markdown-body input[type="checkbox"] { accent-color: var(--accent); opacity: 1; }
+.markdown-body input[type="checkbox"] {
+  appearance: none; display: inline-grid; place-items: center;
+  width: 14px; height: 14px; margin: 0 0.4em 0 0; vertical-align: middle;
+  border: 1px solid var(--fg-faint); border-radius: 4px; background: var(--bg-elev); opacity: 1;
+}
+.markdown-body input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.markdown-body input[type="checkbox"]:checked::before {
+  content: ""; width: 4px; height: 7px;
+  border: solid var(--bg); border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
 
 /* 更新ボタン */
 .update-btn { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; border-radius: 999px; white-space: nowrap; }
@@ -297,8 +311,6 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 }
 .find-count { min-width: 64px; text-align: right; font-size: 12px; color: var(--fg-muted); padding-right: 4px; font-variant-numeric: tabular-nums; }
 .find-count.none { color: var(--danger); }
-.icon-btn:disabled { opacity: 0.35; cursor: default; }
-.icon-btn:disabled:hover { background: none; }
 .find-bar .icon-btn { display: inline-flex; padding: 3px; }
 
 /* 読んでいる位置（右端の細い帯） */
@@ -306,13 +318,14 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   position: relative; width: 12px; flex-shrink: 0;
   border-left: 1px solid var(--border); background: var(--bg-side); cursor: pointer; touch-action: none;
 }
-.ruler-h { position: absolute; right: 2px; height: 1px; background: var(--fg-muted); opacity: 0.45; width: 4px; pointer-events: none; }
+.ruler-h { position: absolute; right: 2px; height: 1px; background: var(--fg-faint); width: 4px; pointer-events: none; }
 .ruler-h.l1, .ruler-h.l2 { height: 2px; width: 9px; background: var(--fg); opacity: 0.7; }
 .ruler-h.l3 { width: 6px; }
 .ruler-find { position: absolute; left: 1px; width: 4px; height: 2px; background: var(--accent); pointer-events: none; }
 .ruler-view {
   position: absolute; left: 0; right: 0; pointer-events: none;
-  background: var(--accent-soft); border: 1px solid var(--accent-soft); border-radius: var(--radius-small);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: var(--radius-small);
 }
 .ruler-tip {
   position: absolute; right: 16px; transform: translateY(-50%); z-index: 6; pointer-events: none;
@@ -338,7 +351,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .folder-menu-label { padding: 6px 9px 2px; color: var(--fg-faint); font-size: var(--label-font-size); font-weight: 600; letter-spacing: 0.06em; }
 .menu-label { color: var(--fg-muted); }
 .icon-text { display: inline-flex; align-items: center; gap: 5px; }
-.segmented button:disabled { opacity: 0.4; cursor: default; }
+.segmented button:disabled { color: var(--fg-faint); cursor: default; }
 
 /* タブ */
 .tabbar {
@@ -364,7 +377,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   position: relative; display: flex; align-items: center; gap: 6px; flex-shrink: 0;
   max-width: 220px; padding: 0 6px 0 10px; font-size: 12.5px; color: var(--fg-muted);
   height: 30px; border-radius: var(--radius-row); cursor: default;
-  transition: var(--color-transition), opacity var(--motion-layout) var(--ease-out), translate var(--motion-layout) var(--ease-out);
+  transition: var(--color-transition), translate var(--motion-layout) var(--ease-out);
 }
 .tab:hover { background: var(--bg-hover); }
 .tab.on { background: var(--bg-elev); color: var(--fg); font-weight: 600; box-shadow: 0 0 0 1px var(--bg-hover); }
@@ -373,7 +386,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 }
 .tab.drop-before::before { left: -1px; }
 .tab.drop-after::after { right: -1px; }
-.tab.dragging { opacity: 0.5; }
+.tab.dragging { background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent); }
 .tab, .tree-row { -webkit-user-drag: none; }
 .split-group { height: 100%; width: 100%; animation: split-open var(--motion-layout) var(--ease-out); }
 @keyframes split-open {
@@ -444,7 +457,8 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.42); }
 .modal-detail { margin-top: 6px; color: var(--fg-muted); font-size: 12.5px; overflow-wrap: anywhere; }
 .modal-actions { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
-.btn.primary:hover { background: var(--accent); filter: brightness(1.1); }
+.btn.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+.btn.primary:disabled { background: var(--bg-hover); color: var(--fg-muted); }
 .context-menu {
   position: fixed; z-index: 90; min-width: 200px; padding: 4px; border-radius: var(--radius-card);
   background: var(--bg-side); border: 1px solid var(--border); box-shadow: var(--shadow);
@@ -452,7 +466,7 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.42); }
 }
 .context-menu button { text-align: left; border: none; background: none; padding: 5px 10px; border-radius: var(--radius-small); }
 .context-menu button:hover:not(:disabled) { background: var(--bg-hover); }
-.context-menu button:disabled { opacity: 0.4; cursor: default; }
+.context-menu button:disabled { color: var(--fg-faint); cursor: default; }
 .context-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 
 /* ドラッグで分割: ドロップ先のプレビュー（VS Code と同じく、落とす側の半分を色付きにする） */
