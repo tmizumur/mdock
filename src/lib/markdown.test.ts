@@ -93,6 +93,38 @@ describe("Markdown の描画", () => {
   });
 
   it.each([
+    "# はじめに\n\n本文",
+    "# はじめに\ntitle: 題名\n\n本文",
+    "title: 題名\n\n# はじめに\n\n本文",
+    "- 先頭の項目: 値\n\n# はじめに\n\n本文",
+    "  先頭の継続行\n\n# はじめに\n\n本文",
+  ])("マッピングの条件を満たさなければ区切りの内側を Markdown として描画する", (body) => {
+    const src = `---\n\n${body}\n\n---`;
+    const html = render(src);
+
+    expect(html.querySelector(".front-matter")).toBeNull();
+    expect(html.querySelectorAll("hr")).toHaveLength(2);
+    expect(html.querySelector("h1")?.textContent).toBe("はじめに");
+    expect(html.querySelector("p:last-of-type")?.textContent).toBe("本文");
+    expect(markdownHeadings(src)[0]?.text).toBe("はじめに");
+  });
+
+  it("引用符付きキーとブロックスカラーを表に表示し、空行と HTML エスケープを保つ", () => {
+    const html = render([
+      "---", "", '"foo:bar": value', "'a:''<i>': |", "  <em>1 行目</em>", "", "    3 行目  ",
+      "folded: >", "", "  A", "  B", "", "tags:", "- a: b", "- c", "# コメント", "---",
+    ].join("\n"));
+
+    expect(Array.from(html.querySelectorAll(".front-matter th"), (cell) => cell.textContent)).toEqual([
+      "foo:bar", "a:'<i>", "folded", "tags",
+    ]);
+    expect(Array.from(html.querySelectorAll(".front-matter td"), (cell) => cell.textContent)).toEqual([
+      "value", "  <em>1 行目</em>\n\n    3 行目  ", "\n  A\n  B\n", "- a: b\n- c",
+    ]);
+    expect(html.querySelector(".front-matter em, .front-matter i")).toBeNull();
+  });
+
+  it.each([
     ["NOTE", "note", "Note"],
     ["tip", "tip", "Tip"],
     ["IMPORTANT", "important", "Important"],
@@ -107,6 +139,18 @@ describe("Markdown の描画", () => {
     expect(alert?.lastElementChild?.textContent).toBe("続き");
     expect(alert?.textContent).not.toContain("[!");
     expect(html.querySelector("blockquote")?.textContent).toContain("[!NOTE]");
+  });
+
+  it("入れ子の引用とリスト内の引用は注記に変換しない", () => {
+    const html = render([
+      "> > [!NOTE]\n> > 入れ子", "- > [!TIP]\n  > リスト内",
+      "> [!WARNING]\n> 最上位\n>\n> > [!CAUTION]\n> > 注記内",
+    ].join("\n\n"));
+
+    expect(html.querySelectorAll(".markdown-alert")).toHaveLength(1);
+    expect(html.querySelector("blockquote blockquote")?.textContent).toContain("[!NOTE]");
+    expect(html.querySelector("li blockquote")?.textContent).toContain("[!TIP]");
+    expect(html.querySelector(".markdown-alert-warning blockquote")?.textContent).toContain("[!CAUTION]");
   });
 
   it("生 HTML を含む脚注でも、複数の参照と戻り先の ID が一致する", () => {

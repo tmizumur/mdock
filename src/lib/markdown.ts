@@ -160,32 +160,58 @@ md.use(anchor, {
   },
 });
 
+const frontMatterField = /^(?:(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')[ \t]*|((?!-[ \t])[^\s:#"'][^:]*)):(?:[ \t]+|$)(.*)$/;
+const blockScalar = /^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:[ \t]+#.*)?$/;
+type FrontMatterRow = [key: string, lines: string[]];
+
 // 先頭のフロントマターを元の行番号のまま取り込む。
 md.block.ruler.before("table", "front_matter", (state, start, end, silent) => {
   const lineAt = (i: number) => state.src.slice(state.bMarks[i], state.eMarks[i]);
   if (start !== 0 || state.level !== 0 || !/^\uFEFF?---[ \t]*$/.test(lineAt(0))) return false;
-  let close = 1;
-  while (close < end && !/^(?:---|\.\.\.)[ \t]*$/.test(lineAt(close))) close++;
-  if (close === end) return false;
-  if (silent) return true;
-  const token = state.push("front_matter", "details", 0);
-  token.map = [0, close + 1];
-  token.content = state.src.slice(state.bMarks[1], state.bMarks[close]);
-  state.line = close + 1;
-  return true;
+  const rows: FrontMatterRow[] = [];
+  let row: FrontMatterRow | undefined;
+  let inScalar = false;
+  for (let i = 1; i < end; i++) {
+    const line = lineAt(i);
+    if (/^(?:---|\.\.\.)[ \t]*$/.test(line)) {
+      if (!row) return false;
+      if (silent) return true;
+      const token = state.push("front_matter", "details", 0);
+      token.map = [0, i + 1];
+      token.meta = { rows };
+      state.line = i + 1;
+      return true;
+    }
+    if (!line.trim()) {
+      if (inScalar) row?.[1].push(line);
+      continue;
+    }
+    const field = frontMatterField.exec(line);
+    if (field) {
+      const [, doubleQuoted, singleQuoted, plain, value] = field;
+      const key = doubleQuoted?.replace(/\\(["\\])/g, "$1") ?? singleQuoted?.replace(/''/g, "'") ?? plain.trimEnd();
+      inScalar = blockScalar.test(value.trimEnd());
+      row = [key, inScalar || !value ? [] : [value]];
+      rows.push(row);
+    } else if (!row) {
+      return false;
+    } else if (/^[ \t]/.test(line)) {
+      row[1].push(line);
+    } else if (/^-[ \t]/.test(line)) {
+      inScalar = false;
+      row[1].push(line);
+    } else if (line.startsWith("#")) {
+      inScalar = false;
+    } else {
+      return false;
+    }
+  }
+  return false;
 });
 
 md.renderer.rules.front_matter = (tokens, idx) => {
-  const rows: [string, string][] = [];
-  for (const line of tokens[idx].content.split("\n")) {
-    const field = /^([^\s:#][^:]*):(?:[ \t]+|$)(.*)$/.exec(line);
-    if (field) rows.push([field[1].trimEnd(), field[2]]);
-    else if (/^(?:[ \t]+\S|-[ \t])/.test(line) && rows.length) {
-      const row = rows[rows.length - 1];
-      row[1] += row[1] ? `\n${line}` : line;
-    }
-  }
-  const body = rows.map(([key, value]) => `<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(value)}</td></tr>`).join("");
+  const rows = tokens[idx].meta!.rows as FrontMatterRow[];
+  const body = rows.map(([key, lines]) => `<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(lines.join("\n"))}</td></tr>`).join("");
   return `<details class="front-matter" data-line="0"><summary>フロントマター</summary><table><tbody>${body}</tbody></table></details>\n`;
 };
 
@@ -205,7 +231,7 @@ md.core.ruler.before("inline", "markdown-alert", ({ tokens }) => {
     if (token.type === "blockquote_close" && levels.delete(token.level)) {
       token.tag = "div";
     }
-    if (token.type !== "blockquote_open" || tokens[i + 1]?.type !== "paragraph_open") continue;
+    if (token.type !== "blockquote_open" || token.level !== 0 || tokens[i + 1]?.type !== "paragraph_open") continue;
     const inline = tokens[i + 2];
     const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\n|$)/i.exec(inline.content);
     if (!match) continue;

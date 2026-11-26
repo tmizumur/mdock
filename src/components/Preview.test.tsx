@@ -98,4 +98,31 @@ describe("Markdown プレビュー", () => {
     expect(src("猫")).not.toBe(refreshed);
     expect(src("生 HTML")).toMatch(/\?v=\d+$/);
   });
+
+  it("別タブを表示している間の画像変更を、元のタブに戻ったときに反映する", () => {
+    mockConvertFileSrc("macos");
+    const content = "![写真](gallery/photo.png) ![別の写真](archive/other.png)";
+    const src = (alt: string) => host.querySelector(`img[alt="${alt}"]`)?.getAttribute("src");
+    const change = (paths: string[], rescan = false) => window.dispatchEvent(new CustomEvent(FILES_CHANGED, {
+      detail: { paths, rescan },
+    }));
+
+    show(content);
+    const original = src("写真");
+    const other = src("別の写真");
+    show("# 別タブ", undefined, "別タブ");
+    change(["/workspace/Gallery"]);
+    show(content);
+    const refreshed = src("写真");
+    expect(refreshed).toMatch(/\?v=\d+$/);
+    expect(refreshed).not.toBe(original);
+    expect(src("別の写真")).toBe(other);
+
+    show("# 別タブ", undefined, "別タブ");
+    change([], true);
+    show(content);
+    expect(src("写真")).not.toBe(refreshed);
+    expect(src("別の写真")).toMatch(/\?v=\d+$/);
+    expect(src("別の写真")).not.toBe(other);
+  });
 });

@@ -15,7 +15,7 @@ import {
 import { confirmOpenUrl, copyText, safeDecode, statPaths } from "../lib/api";
 import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find";
 import { classifyLink, localLinkAction } from "../lib/links";
-import { FILES_CHANGED, changeMatcher, pathKey } from "../lib/liveReload";
+import { FILES_CHANGED, pathKey } from "../lib/liveReload";
 import { useSettings } from "../lib/settings";
 import Lightbox, { type LightboxMedia } from "./Lightbox";
 
@@ -82,6 +82,37 @@ const handledAnchors = new WeakSet<NonNullable<Props["anchor"]>>();
 const localImageUrl = /^asset:\/\/localhost\/([^?#]+)/i;
 const lightboxTrigger = "img:not(a img), .mermaid-block svg:not(svg svg, a svg)";
 
+// プレビューを閉じている間も、変更されたパスの更新番号を覚えておく。
+const imageVersions = new Map<string, number>();
+const imageRefreshers = new Set<() => void>();
+let imageVersion = 0;
+let imageRescanVersion = 0;
+
+function onFilesChanged({ detail }: WindowEventMap[typeof FILES_CHANGED]) {
+  imageVersion = Math.max(Date.now(), imageVersion + 1);
+  if (detail.rescan) {
+    imageVersions.clear();
+    imageRescanVersion = imageVersion;
+  } else {
+    for (const path of detail.paths) imageVersions.set(pathKey(path), imageVersion);
+  }
+  for (const refresh of imageRefreshers) refresh();
+}
+
+window.addEventListener(FILES_CHANGED, onFilesChanged);
+import.meta.hot?.dispose(() => window.removeEventListener(FILES_CHANGED, onFilesChanged));
+
+function versionForImage(key: string) {
+  let version = imageRescanVersion;
+  while (key) {
+    version = Math.max(version, imageVersions.get(key) ?? 0);
+    const slash = key.lastIndexOf("/");
+    if (slash < 1) break;
+    key = key.slice(0, slash);
+  }
+  return version;
+}
+
 function prepareLightboxTriggers(root: HTMLElement) {
   for (const image of root.querySelectorAll(lightboxTrigger)) {
     image.setAttribute("tabindex", "0");
@@ -133,7 +164,6 @@ function lightboxMedia(image: HTMLImageElement | SVGSVGElement, animations: bool
 function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, find, onFindResult, onRendered, immediate = false }: Props) {
   const ref = useRef<HTMLElement>(null);
   const lastAnchorNonce = useRef<number>(undefined);
-  const imageVersions = useRef({ version: 0, paths: new Map<string, number>() });
   const { settings } = useSettings();
   const source = useSettledContent(path, content, immediate);
   const [mathOn, setMathOn] = useState(mathReady());
@@ -156,7 +186,7 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     const root = ref.current;
     if (!root) return;
     prepareLightboxTriggers(root);
-    const images: { img: HTMLImageElement; path: string; url: string }[] = [];
+    const images: { img: HTMLImageElement; key: string; url: string }[] = [];
     for (const img of root.querySelectorAll<HTMLImageElement>("img")) {
       const src = img.getAttribute("src") ?? "";
       if (!img.hasAttribute("data-local") && (isRelative(src) || /^\/(?!\/)/.test(src))) {
@@ -165,22 +195,18 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
       }
       const asset = img.dataset.local === "1" && localImageUrl.exec(img.getAttribute("src") ?? "");
       if (!asset) continue;
-      const file = safeDecode(asset[1]);
-      const version = imageVersions.current.paths.get(pathKey(file));
-      if (version !== undefined) img.src = `${asset[0]}?v=${version}`;
-      images.push({ img, path: file, url: asset[0] });
+      images.push({ img, key: pathKey(safeDecode(asset[1])), url: asset[0] });
     }
-    const onFilesChanged = ({ detail }: WindowEventMap[typeof FILES_CHANGED]) => {
-      const matches = changeMatcher(detail);
-      const versions = imageVersions.current;
-      const version = versions.version = Math.max(Date.now(), versions.version + 1);
-      for (const { img, path, url } of images) {
-        if (!matches(path)) continue;
-        versions.paths.set(pathKey(path), version);
-        img.src = `${url}?v=${version}`;
+    const refreshImages = () => {
+      for (const { img, key, url } of images) {
+        const version = versionForImage(key);
+        if (!version) continue;
+        const src = `${url}?v=${version}`;
+        if (img.getAttribute("src") !== src) img.src = src;
       }
     };
-    if (images.length) window.addEventListener(FILES_CHANGED, onFilesChanged);
+    refreshImages();
+    if (images.length) imageRefreshers.add(refreshImages);
     setDomVersion((v) => v + 1);
     onRendered?.();
 
@@ -209,7 +235,7 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     return () => {
       io.disconnect();
       root.removeEventListener("load", onLoad, true);
-      window.removeEventListener(FILES_CHANGED, onFilesChanged);
+      imageRefreshers.delete(refreshImages);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, path]);
