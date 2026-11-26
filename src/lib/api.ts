@@ -8,7 +8,7 @@ export type Entry = {
   loaded?: boolean;
 };
 
-export type TextInfo = { text: string; encoding: string; bom: boolean };
+export type TextInfo = { text: string; encoding: string; bom: boolean; lossy: boolean };
 export type TextFormat = { encoding?: string; bom?: boolean };
 const fileErrorMessages = {
   not_found: "ファイルが見つかりません。",
@@ -54,7 +54,8 @@ export const watchFolder = (root: string) => invoke<void>("watch_folder", { root
 /** 開いているファイルの一覧（フォルダの外のファイルも監視するため） */
 export const watchFiles = (paths: string[]) => invoke<void>("watch_files", { paths });
 /** 変更のあったフォルダだけ読み直す（フォルダごとの中身。消えていれば null） */
-export const readDirs = (dirs: string[], root: string) => invoke<(Entry[] | null)[]>("read_dirs", { dirs, root });
+export const readDirs = (dirs: string[], root: string, maxDepth?: number) =>
+  invoke<(Entry[] | null)[]>("read_dirs", { dirs, root, maxDepth });
 
 export type Stat = { exists: boolean; is_dir: boolean; is_executable?: boolean; mtime: number; size: number };
 export const statPaths = (paths: string[]) => invoke<Stat[]>("stat_paths", { paths });

@@ -65,6 +65,7 @@ pub(crate) struct TextInfo {
     text: String,
     encoding: &'static str,
     bom: bool,
+    lossy: bool,
 }
 
 fn check_file(metadata: &Metadata) -> Result<(), FileError> {
@@ -155,6 +156,7 @@ fn decode(mut bytes: Vec<u8>) -> Result<TextInfo, FileError> {
                     text,
                     encoding: UTF_8.name(),
                     bom: false,
+                    lossy: false,
                 });
             }
             Ok(text) => {
@@ -186,6 +188,7 @@ fn decode(mut bytes: Vec<u8>) -> Result<TextInfo, FileError> {
         text: text.into_owned(),
         encoding: encoding.name(),
         bom: skip != 0,
+        lossy: had_errors,
     })
 }
 
@@ -221,7 +224,9 @@ pub(crate) fn write(
         }
     } else {
         let (encoded, _, had_errors) = encoding.encode(text);
-        if had_errors {
+        if had_errors
+            || (encoding != UTF_8 && encoding.decode_without_bom_handling(&encoded).0 != text)
+        {
             return Err(FileError::new(
                 "unrepresentable",
                 format!("この文字は {} で保存できません。", encoding.name()),
@@ -324,6 +329,36 @@ pub(crate) mod tests {
             "unrepresentable"
         );
         assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn marks_lossy_decoding_below_the_error_threshold() {
+        let mut bytes = b"\xef\xbb\xbf".to_vec();
+        bytes.extend([b'a'; 99]);
+        bytes.push(0xff);
+        let info = decode(bytes).unwrap();
+        assert!(info.lossy);
+        assert!(info.text.ends_with('\u{fffd}'));
+        assert!(
+            !decode("本文中の\u{fffd}".as_bytes().to_vec())
+                .unwrap()
+                .lossy
+        );
+    }
+
+    #[test]
+    fn rejects_shift_jis_when_the_yen_sign_changes_on_round_trip() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        let original = b"original";
+        fs::write(&path, original).unwrap();
+        assert_eq!(
+            write(&path, "100 ¥", Some("Shift_JIS"), false)
+                .unwrap_err()
+                .code,
+            "unrepresentable"
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]

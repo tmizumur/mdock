@@ -31,7 +31,9 @@ export default function StatusBar({ live, branch, modified, added, tab, fontSize
       <span className="spacer" />
       {path && <span className="status-path" title={path}><bdi>{path}</bdi></span>}
       {count !== null && <span title="空白を除いた文字数。読了時間は毎分400文字での目安">{format.format(count)} 文字 · 約 {Math.ceil(count / 400)} 分</span>}
-      {tab?.kind === "doc" && !tab.readError && <span>{isMarkdown(tab.path) ? "Markdown · " : ""}{tab.encoding ?? "UTF-8"}</span>}
+      {tab?.kind === "doc" && !tab.readError && (
+        <span>{isMarkdown(tab.path) ? "Markdown · " : ""}{tab.encoding ?? "UTF-8"}{tab.lossy && "（一部読めない文字）"}</span>
+      )}
       <span>{fontSize} px</span>
     </footer>
   );

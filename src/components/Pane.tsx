@@ -168,6 +168,12 @@ export default function Pane(props: Props) {
           </button>
         </div>
       )}
+      {doc && !doc.deleted && doc.externalReadError && (
+        <div className="file-notice" role="status">
+          外部で変更されましたが、読み直せませんでした。
+          <small>{doc.externalReadError.message}</small>
+        </div>
+      )}
       {!tab ? (
         <div className="placeholder">
           左のツリーからファイルを選ぶか、ここにドラッグしてください

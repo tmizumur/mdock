@@ -130,17 +130,21 @@ async fn read_tree(root: String, max_depth: Option<usize>) -> Result<Vec<Entry>,
 /// 変更のあったフォルダだけを読み直す（ツリー全体を読み直すと重いため）。
 /// フォルダごとに中身（サブツリー）を返す。フォルダが無くなっていれば null。
 #[tauri::command]
-async fn read_dirs(dirs: Vec<String>, root: String) -> Result<Vec<Option<Vec<Entry>>>, String> {
+async fn read_dirs(
+    dirs: Vec<String>,
+    root: String,
+    max_depth: Option<usize>,
+) -> Result<Vec<Option<Vec<Entry>>>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         dirs.iter()
-            .map(|d| read_subtree(Path::new(d), Path::new(&root)))
+            .map(|d| read_subtree(Path::new(d), Path::new(&root), max_depth))
             .collect()
     })
     .await
     .map_err(|e| e.to_string())
 }
 
-fn read_subtree(dir: &Path, root: &Path) -> Option<Vec<Entry>> {
+fn read_subtree(dir: &Path, root: &Path, max_depth: Option<usize>) -> Option<Vec<Entry>> {
     if !dir.is_dir() || !dir.starts_with(root) {
         return None;
     }
@@ -158,7 +162,8 @@ fn read_subtree(dir: &Path, root: &Path) -> Option<Vec<Entry>> {
         }
         ancestors.push(real);
     }
-    Some(walk_dir(dir, depth, &mut ancestors, None))
+    let limit = max_depth.map(|limit| depth.saturating_add(limit));
+    Some(walk_dir(dir, depth, &mut ancestors, limit))
 }
 
 #[cfg(test)]
@@ -185,6 +190,25 @@ mod tests {
 
         let full = walk(&root.0, 0);
         assert_eq!(full[0].children[0].loaded, None);
+        assert_eq!(full[0].children[0].children[0].name, "deep.md");
+    }
+
+    #[test]
+    fn read_subtree_limits_depth_relative_to_the_expanded_folder() {
+        let root = super::text_file::tests::TempDir::new();
+        let dir = root.0.join("a/b");
+        fs::create_dir_all(dir.join("c/d")).unwrap();
+        fs::write(dir.join("c/d/deep.md"), "").unwrap();
+
+        let shallow = super::read_subtree(&dir, &root.0, Some(2)).unwrap();
+        assert_eq!(shallow[0].name, "c");
+        assert_eq!(shallow[0].loaded, None);
+        let boundary = &shallow[0].children[0];
+        assert_eq!(boundary.name, "d");
+        assert_eq!(boundary.loaded, Some(false));
+        assert!(boundary.children.is_empty());
+
+        let full = super::read_subtree(&dir, &root.0, None).unwrap();
         assert_eq!(full[0].children[0].children[0].name, "deep.md");
     }
 
@@ -243,10 +267,10 @@ mod tests {
             assert_eq!(entry.children[1].name, "note.md");
         }
         assert_eq!(entries.len(), 2);
-        let subtree = super::read_subtree(&dir, &root.0).unwrap();
+        let subtree = super::read_subtree(&dir, &root.0, None).unwrap();
         assert!(subtree[0].children.is_empty());
         assert!(
-            super::read_subtree(&dir.join("link"), &root.0)
+            super::read_subtree(&dir.join("link"), &root.0, None)
                 .unwrap()
                 .is_empty()
         );

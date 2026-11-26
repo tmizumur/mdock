@@ -5,9 +5,10 @@ import type { FileError, TextFormat, TextInfo, TextReadResult } from "./api";
 
 export type ViewMode = "view" | "edit" | "split";
 
-export const textFormat = (info: TextInfo): TextFormat => ({
+export const textFormat = (info: TextInfo): TextFormat & { lossy?: boolean } => ({
   encoding: info.encoding === "UTF-8" ? undefined : info.encoding,
   bom: info.bom || undefined,
+  lossy: info.lossy || undefined,
 });
 
 export type DocTab = {
@@ -20,6 +21,7 @@ export type DocTab = {
   mode: ViewMode;
   encoding?: string;
   bom?: boolean;
+  lossy?: boolean;
   force?: boolean;
   readError?: FileError;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンクから開いたとき） */
@@ -28,6 +30,8 @@ export type DocTab = {
   deleted?: boolean;
   /** 未保存の変更があるときに、外部で書き換わった内容（再読み込みするか確認する） */
   external?: TextInfo;
+  /** 外部で変更されたファイルを読み直せなかった理由 */
+  externalReadError?: FileError;
 };
 
 export type DiffSide = "left" | "right";
@@ -48,21 +52,18 @@ export type Tab = DocTab | DiffTab;
 export function receiveDocText(tab: DocTab, info: TextInfo, force = tab.force): DocTab {
   const { text } = info;
   const format = textFormat(info);
-  const clear = { ...format, force, deleted: false, readError: undefined, external: undefined };
-  if (tab.readError) {
-    return { ...tab, ...clear, content: text === tab.saved ? tab.content : text, saved: text };
-  }
-  const settled = !tab.deleted && tab.external === undefined && tab.force === force &&
-    tab.encoding === format.encoding && tab.bom === format.bom;
+  const clear = { ...format, force, deleted: false, readError: undefined, external: undefined, externalReadError: undefined };
+  const settled = !tab.deleted && !tab.readError && !tab.external && !tab.externalReadError && tab.force === force &&
+    tab.encoding === format.encoding && tab.bom === format.bom && tab.lossy === format.lossy;
   if (!isDirty(tab)) {
     return text === tab.saved && settled ? tab : { ...tab, ...clear, content: text, saved: text };
   }
-  if (text === tab.content) return { ...tab, ...clear, saved: text };
+  if (text === tab.content && !tab.readError) return { ...tab, ...clear, saved: text };
   if (text === tab.saved) return settled ? tab : { ...tab, ...clear };
   const external = tab.external;
-  return !tab.deleted && tab.force === force && external?.text === text &&
-    external.encoding === info.encoding && external.bom === info.bom
-    ? tab : { ...tab, force, external: info, deleted: false };
+  return !tab.deleted && !tab.readError && !tab.externalReadError && tab.force === force && external?.text === text &&
+    external.encoding === info.encoding && external.bom === info.bom && external.lossy === info.lossy
+    ? tab : { ...tab, force, external: info, deleted: false, readError: undefined, externalReadError: undefined };
 }
 
 export function receiveDiffText(tab: DiffTab, side: DiffSide, result: TextReadResult, force?: boolean): DiffTab {
@@ -100,7 +101,7 @@ export type SavedTab =
       force?: boolean;
       /** 未保存の編集内容（あれば） */
       draft?: string;
-      /** draft を書き始めたときのディスク上の内容。ファイルが外で変わっていたら draft は捨てる */
+      /** draft を書き始めたときのディスク上の内容 */
       draftBase?: string;
     }
   | { kind: "diff"; left: string; right: string; scroll: number; force?: Partial<Record<DiffSide, boolean>> };

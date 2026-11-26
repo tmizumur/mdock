@@ -27,11 +27,19 @@ async function restoreTab(t: SavedTab, scrolls: Map<string, number>): Promise<Ta
   scrolls.set(id, t.scroll ?? 0);
   const force = t.force === true ? true : undefined;
   const { info, error } = await readTextResult(t.path, force);
-  const saved = info?.text ?? t.draftBase ?? "";
-  const content = t.draft !== undefined && (!info || t.draftBase === saved) ? t.draft : saved;
+  let draftBase = typeof t.draftBase === "string" ? t.draftBase : undefined;
+  let draft = typeof t.draft === "string" ? t.draft : undefined;
+  let bom = t.bom;
+  // 旧形式では BOM がディスクの本文と下書きの先頭に含まれていた。
+  if (bom === undefined && t.encoding === undefined && draftBase?.startsWith("\uFEFF")) {
+    draftBase = draftBase.slice(1);
+    draft = draft?.replace(/^\uFEFF/, "");
+    bom = true;
+  }
+  const saved = draftBase ?? info?.text ?? "";
   const tab: DocTab = {
-    id, kind: "doc", path: t.path, content, saved, mode: t.mode ?? "view",
-    encoding: t.encoding, bom: t.bom, force, readError: error,
+    id, kind: "doc", path: t.path, content: draft ?? saved, saved, mode: t.mode ?? "view",
+    encoding: t.encoding, bom, force, readError: error,
   };
   return info ? receiveDocText(tab, info) : tab;
 }

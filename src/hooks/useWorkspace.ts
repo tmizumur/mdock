@@ -75,15 +75,17 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
           ...(info ? textFormat(info) : { readError: error }),
         };
       };
+      const id = livePane(paneId);
+      const requestStatus = openRequests.start(id);
       if (opts.split) {
-        splitWith(paneId, opts.split, [await read()]);
+        const tab = await read();
+        if (requestStatus() !== "latest" || !wsRef.current.panes[id]) return;
+        splitWith(id, opts.split, [tab]);
         setError(null);
         return;
       }
-      const id = livePane(paneId);
       const pane = wsRef.current.panes[id];
       const previous = activeTab(pane)?.id;
-      const requestStatus = openRequests.start(id);
       if (has(pane) < 0) {
         const tab = await read();
         const status = requestStatus();
@@ -175,9 +177,27 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     }
     if (saving.current.has(t.path)) return false;
     saving.current.add(t.path);
-    let text = t.content;
+    // 確認中にファイルの状態が変わったら、次の保存で確認し直す。
+    const currentForSave = () => {
+      const current = allTabs(wsRef.current).find((x) => x.id === tabId);
+      if (current?.kind !== "doc" || current.path !== t.path || current.readError ||
+          current.saved !== t.saved || current.encoding !== t.encoding || current.bom !== t.bom ||
+          current.lossy !== t.lossy || current.external !== t.external ||
+          current.externalReadError !== t.externalReadError || current.deleted !== t.deleted) return undefined;
+      return current;
+    };
+    let text: string;
     let format = { encoding: t.encoding, bom: t.bom };
     try {
+      if ((t.external || t.externalReadError) && !await askDialog("外部で変更されたファイルを上書きしますか？", {
+        title: "外部で変更されました", okLabel: "上書き", cancelLabel: "キャンセル",
+      })) return false;
+      if ((t.lossy || t.external?.lossy) && !await askDialog("このファイルには読み取れなかったバイトがあり、保存すると元のバイトは失われます。保存しますか？", {
+        title: "読み取れなかったバイト", okLabel: "保存", cancelLabel: "キャンセル",
+      })) return false;
+      const current = currentForSave();
+      if (!current) return false;
+      text = current.content;
       try {
         await writeText(t.path, text, format);
       } catch (error) {
@@ -185,8 +205,8 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         if (!await askDialog(`この文字は ${t.encoding} で保存できません。UTF-8 で保存しますか？`, {
           title: "文字コードを変更", okLabel: "UTF-8 で保存", cancelLabel: "キャンセル",
         })) return false;
-        const current = allTabs(wsRef.current).find((x) => x.id === tabId);
-        if (current?.kind !== "doc" || current.path !== t.path || current.readError) return false;
+        const current = currentForSave();
+        if (!current) return false;
         text = current.content;
         format = { encoding: undefined, bom: t.bom };
         await writeText(t.path, text, format);
@@ -197,8 +217,8 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     } finally {
       saving.current.delete(t.path);
     }
-    const clear = { ...format, external: undefined, deleted: false, readError: undefined };
-    const result = { info: { text, encoding: format.encoding ?? "UTF-8", bom: format.bom ?? false } };
+    const clear = { ...format, lossy: undefined, external: undefined, externalReadError: undefined, deleted: false, readError: undefined };
+    const result = { info: { text, encoding: format.encoding ?? "UTF-8", bom: format.bom ?? false, lossy: false } };
     apply((w) =>
       mapTabs(w, (x): Tab => {
         if (x.kind === "doc" && x.path === t.path) {

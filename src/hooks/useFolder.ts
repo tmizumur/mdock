@@ -70,7 +70,7 @@ export function useFolder(
     if (!load || !root || load.expanding.has(dir)) return;
     load.expanding.add(dir);
     try {
-      const [children] = await readDirs([dir], root);
+      const [children] = await readDirs([dir], root, 2);
       if (folderLoadRef.current !== load || !children) return;
       const tree = treeRef.current;
       const next = spliceTree(tree, dir, children, true);

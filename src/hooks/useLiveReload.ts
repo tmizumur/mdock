@@ -108,7 +108,9 @@ export function useLiveReload(
             return next;
           }
           if (prior.kind !== "doc" || prior.path !== t.path || prior.saved !== t.saved ||
-              prior.readError !== t.readError || prior.encoding !== t.encoding || prior.bom !== t.bom) return t;
+              prior.readError !== t.readError || prior.external !== t.external ||
+              prior.externalReadError !== t.externalReadError || prior.encoding !== t.encoding ||
+              prior.bom !== t.bom || prior.lossy !== t.lossy) return t;
           const result = resultFor(t.path);
           const force = forced.has(t.path) || undefined;
           if (!result) return t;
@@ -118,8 +120,10 @@ export function useLiveReload(
           if (result.error.code === "not_found" && !t.readError) {
             return t.deleted ? t : { ...t, deleted: true, external: undefined };
           }
-          if (isDirty(t) && !t.readError) return t;
-          return { ...t, deleted: false, external: undefined, readError: result.error };
+          if (isDirty(t) && !t.readError) {
+            return { ...t, deleted: false, external: undefined, externalReadError: result.error };
+          }
+          return { ...t, deleted: false, external: undefined, externalReadError: undefined, readError: result.error };
         }),
       );
     },

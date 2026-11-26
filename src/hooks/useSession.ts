@@ -65,7 +65,7 @@ export function usePersist(
         mode: t.mode,
         scroll,
         encoding: t.encoding,
-        bom: t.bom,
+        bom: t.bom ?? false,
         force: t.force,
         ...(t.content !== t.saved ? { draft: t.content, draftBase: t.saved } : {}),
       };

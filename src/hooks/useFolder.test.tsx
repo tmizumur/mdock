@@ -95,6 +95,7 @@ describe("フォルダツリーの読み込み", () => {
 
     await act(() => folder.openFolder(first));
     await act(() => folder.loadDirectory(dir));
+    expect(readDirs).toHaveBeenCalledWith([dir], first, 2);
     expect(folder.tree[0].children[0]).toMatchObject({ loaded: true, children: [note] });
     await act(() => folder.openFolder(second));
     await act(async () => scan.resolve(full));
