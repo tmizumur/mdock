@@ -15,6 +15,8 @@
   --git-modified: #E5C07B;
   --git-added: #7FD39A;
   --danger: #F48771;
+  --code-keyword: #C3A6FF;
+  --code-string: #9FD8A8;
 
   --find: color-mix(in srgb, var(--accent) 32%, transparent);
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);

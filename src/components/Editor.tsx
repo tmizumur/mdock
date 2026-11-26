@@ -1,9 +1,11 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { EditorView, basicSetup } from "codemirror";
-import { Compartment, EditorState } from "@codemirror/state";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { openSearchPanel } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
+import { styleTags, tags } from "@lezer/highlight";
 import { useSettings } from "../lib/settings";
 import type { markdownHeadings } from "../lib/markdown";
 import { editorTopLine, scrollEditorToLine } from "../lib/scrollSync";
@@ -48,19 +50,70 @@ const JA = EditorState.phrases.of({
 });
 
 const editorTheme = EditorView.theme({
-  "&": { backgroundColor: "var(--bg)", color: "var(--fg)" },
-  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--fg-faint)", borderInlineEnd: "1px solid var(--border-soft)" },
+  "&": { backgroundColor: "var(--bg)", color: "var(--fg)", colorScheme: "dark" },
+  ".cm-scroller .cm-gutters": { backgroundColor: "var(--bg)", color: "var(--fg-faint)" },
+  ".cm-scroller .cm-gutters-before": { borderInlineEnd: "1px solid var(--border-soft)" },
+  ".cm-gutters .cm-gutter, .cm-gutters .cm-lineNumbers": { backgroundColor: "var(--bg)", color: "var(--fg-faint)" },
+  ".cm-gutters .cm-activeLineGutter": { backgroundColor: "var(--bg-elev)", color: "var(--fg)" },
   ".cm-line": { paddingInline: "40px" },
-  ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--bg-elev)" },
+  ".cm-content .cm-activeLine": { backgroundColor: "var(--bg-elev)" },
   ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": { background: "var(--accent-soft)" },
   ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
   ".cm-searchMatch": { backgroundColor: "var(--find)" },
   ".cm-searchMatch-selected": { backgroundColor: "var(--accent)", color: "var(--bg)" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--fg)" },
+  ".cm-searchMatch-selected span": { color: "inherit" },
+  ".cm-scroller .cm-content": { caretColor: "var(--accent)" },
+  ".cm-scroller .cm-cursor, .cm-scroller .cm-dropCursor": { borderLeftColor: "var(--accent)" },
+  ".cm-foldGutter span": { color: "var(--fg-faint)" },
+  ".cm-foldGutter span:hover": { color: "var(--fg)" },
+  ".cm-foldPlaceholder": { backgroundColor: "var(--bg-elev)", border: "1px solid var(--border)", color: "var(--fg-muted)" },
   ".cm-panels": { backgroundColor: "var(--bg-side)", color: "var(--fg)" },
-  ".cm-panels-top, .cm-panels-bottom": { borderColor: "var(--border)" },
-  ".cm-textfield, .cm-button": { background: "var(--bg-elev)", color: "var(--fg)", borderColor: "var(--border)", borderRadius: "var(--radius-small)" },
+  ".cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-panels-bottom": { borderTop: "1px solid var(--border)" },
+  ".cm-textfield, .cm-button": {
+    backgroundColor: "var(--bg-elev)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-small)",
+  },
+  ".cm-button, .cm-button:active": { backgroundImage: "none" },
+  ".cm-button:active": { backgroundColor: "var(--bg-hover)" },
+  ".cm-panel button[name=close]": { color: "var(--fg-muted)" },
+  ".cm-panel button[name=close]:hover": { color: "var(--fg)" },
+  ".cm-panel label": { color: "var(--fg-muted)" },
+  ".cm-panel input[type=checkbox]": { accentColor: "var(--accent)" },
+  ".cm-textfield::placeholder": { color: "var(--fg-faint)", opacity: "1" },
+  ".cm-textfield:focus": { borderColor: "var(--accent)", outline: "none" },
+  ".cm-tooltip, .cm-tooltip-autocomplete": { backgroundColor: "var(--bg-side)", border: "1px solid var(--border)", color: "var(--fg)" },
+  ".cm-tooltip.cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--fg)" },
+  ".cm-completionDetail, .cm-completionMatchedText": { color: "var(--fg-muted)" },
+  ".cm-tooltip-above .cm-tooltip-arrow::before": { borderTopColor: "var(--border)" },
+  ".cm-tooltip-above .cm-tooltip-arrow::after": { borderTopColor: "var(--bg-side)" },
+  ".cm-tooltip-below .cm-tooltip-arrow::before": { borderBottomColor: "var(--border)" },
+  ".cm-tooltip-below .cm-tooltip-arrow::after": { borderBottomColor: "var(--bg-side)" },
+  "&.cm-focused .cm-matchingBracket": { backgroundColor: "var(--accent-soft)" },
+  "&.cm-focused .cm-nonmatchingBracket": {
+    backgroundColor_fallback: "var(--diff-del)",
+    backgroundColor: "color-mix(in srgb, var(--danger) 20%, transparent)",
+  },
+  ".cm-specialChar": { color: "var(--danger)" },
 }, { dark: true });
+
+// Markdown の見出し記号を、ほかの処理記号と別の色にする。
+const headingMark = tags.special(tags.processingInstruction);
+const editorHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading, color: "var(--fg)", fontWeight: "bold" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strikethrough, textDecoration: "line-through" },
+  { tag: tags.link, color: "var(--accent)", textDecoration: "underline" },
+  { tag: [tags.comment, tags.quote, tags.processingInstruction, tags.meta, tags.punctuation], color: "var(--fg-muted)" },
+  { tag: tags.keyword, color: "var(--code-keyword)" },
+  { tag: [tags.string, tags.regexp], color: "var(--code-string)" },
+  { tag: [tags.number, tags.atom, tags.bool, tags.null, tags.constant(tags.name), tags.typeName, tags.className], color: "var(--git-modified)" },
+  { tag: [headingMark, tags.url, tags.function(tags.name)], color: "var(--accent)" },
+  { tag: tags.invalid, color: "var(--danger)" },
+]);
 
 /** CodeMirror 6 の Markdown エディタ */
 const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, initialScroll, onScroll, headings, onOutline }, handle) {
@@ -87,10 +140,14 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
       state: EditorState.create({
         doc: value,
         extensions: [
+          Prec.highest(syntaxHighlighting(editorHighlightStyle)),
           basicSetup,
           editorTheme,
           JA,
-          markdown({ codeLanguages: languages }),
+          markdown({
+            codeLanguages: languages,
+            extensions: { props: [styleTags({ HeaderMark: headingMark })] },
+          }),
           wrapping.current.of(settings.wrap ? EditorView.lineWrapping : []),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onChangeRef.current(u.state.doc.toString());
