@@ -18,14 +18,15 @@ struct Entry {
     children: Vec<Entry>,
 }
 
-/// 読み飛ばすフォルダ（大きくて md を含まないことが多いもの）。隠しファイルを表示するときも除外する。
+/// ツリーから除外するフォルダ（依存関係、ビルド成果物、Git の管理データなど）
 const SKIP_DIRS: &[&str] = &[
     "node_modules", "target", "dist", "build", ".git", ".venv", "__pycache__", ".next", ".cache", ".turbo", ".svn", ".hg",
 ];
-/// 隠しファイルを表示するときも出さないファイル
+/// ツリーから除外するファイル
 const SKIP_FILES: &[&str] = &[".DS_Store"];
 
-fn walk(dir: &Path, depth: usize, hidden: bool) -> Vec<Entry> {
+/// 除外対象を飛ばし、隠しファイル・フォルダを含めてツリーを読み込む。
+fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
     if depth > 12 {
         return vec![];
     }
@@ -34,7 +35,7 @@ fn walk(dir: &Path, depth: usize, hidden: bool) -> Vec<Entry> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            if (!hidden && name.starts_with('.')) || SKIP_FILES.contains(&name.as_str()) {
+            if SKIP_FILES.contains(&name.as_str()) {
                 return None;
             }
             let path = e.path();
@@ -42,7 +43,7 @@ fn walk(dir: &Path, depth: usize, hidden: bool) -> Vec<Entry> {
             if is_dir && SKIP_DIRS.contains(&name.as_str()) {
                 return None;
             }
-            let children = if is_dir { walk(&path, depth + 1, hidden) } else { vec![] };
+            let children = if is_dir { walk(&path, depth + 1) } else { vec![] };
             Some(Entry { name, path: path.to_string_lossy().to_string(), is_dir, children })
         })
         .collect();
@@ -54,13 +55,13 @@ fn walk(dir: &Path, depth: usize, hidden: bool) -> Vec<Entry> {
 // 読み込みは画面（メインスレッド）を止めないよう、別スレッドで行う
 
 #[tauri::command]
-async fn read_tree(root: String, show_hidden: Option<bool>) -> Result<Vec<Entry>, String> {
+async fn read_tree(root: String) -> Result<Vec<Entry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = PathBuf::from(root);
         if !root.is_dir() {
             return Err("フォルダが見つかりません".into());
         }
-        Ok(walk(&root, 0, show_hidden.unwrap_or(false)))
+        Ok(walk(&root, 0))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -69,18 +70,46 @@ async fn read_tree(root: String, show_hidden: Option<bool>) -> Result<Vec<Entry>
 /// 変更のあったフォルダだけを読み直す（ツリー全体を読み直すと重いため）。
 /// フォルダごとに中身（サブツリー）を返す。フォルダが無くなっていれば null。
 #[tauri::command]
-async fn read_dirs(dirs: Vec<String>, show_hidden: Option<bool>) -> Result<Vec<Option<Vec<Entry>>>, String> {
+async fn read_dirs(dirs: Vec<String>) -> Result<Vec<Option<Vec<Entry>>>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let hidden = show_hidden.unwrap_or(false);
         dirs.iter()
             .map(|d| {
                 let p = Path::new(d);
-                p.is_dir().then(|| walk(p, 0, hidden))
+                p.is_dir().then(|| walk(p, 0))
             })
             .collect()
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fs, walk};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn walk_includes_hidden_entries_and_skips_exclusions() {
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("mdock-tree-{}-{timestamp}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        for dir in [".github", ".git", "node_modules/x"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [".env", ".github/workflow.yml", "a.md", "b.txt", ".git/config", "node_modules/x/index.js", ".DS_Store"] {
+            fs::write(root.join(file), "").unwrap();
+        }
+
+        let entries = walk(&root, 0);
+        fs::remove_dir_all(&root).unwrap();
+
+        let names: Vec<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, [".github", ".env", "a.md", "b.txt"]);
+        let github = &entries[0];
+        assert!(github.is_dir);
+        assert_eq!(github.children.len(), 1);
+        assert_eq!(github.children[0].name, "workflow.yml");
+    }
 }
 
 #[tauri::command]

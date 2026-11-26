@@ -24,6 +24,7 @@ const SHORTCUTS: [string, string][] = [
   ["⌘ E", "表示 / 編集の切り替え"],
   ["⌘ F", "ファイル内を検索"],
   ["⌘ \\", "右に分割"],
+  ["⌘ ⌥ \\", "上下に分割 / 1画面に戻す"],
   ["⌘ 1〜9", "n 番目のペインへ（1 つ先なら新しいペインを作る）"],
   ["⌘ ⇧ [  /  ⌘ ⇧ ]", "前 / 次のタブ"],
   ["⌘ +  /  ⌘ −  /  ⌘ 0", "文字を大きく / 小さく / 標準に"],
@@ -170,8 +171,6 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "files" && (
             <>
-              <Toggle k="mdOnly" label="Markdown ファイルだけを表示" note=".md / .markdown / .mdx 以外と、それを含まないフォルダを隠します" />
-              <Toggle k="showHidden" label="隠しファイルを表示" note=". で始まるファイル・フォルダも表示します" />
               <Toggle
                 k="gitStatus"
                 label="ツリーに Git の変更状態を表示"

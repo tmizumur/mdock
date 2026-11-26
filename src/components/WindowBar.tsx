@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Columns2, GitBranch, PanelLeft, Rows2, Settings, Square } from "lucide-react";
+import { ChevronDown, Columns2, GitBranch, PanelLeft, Rows2, Settings } from "lucide-react";
 import { norm } from "../lib/api";
 import type { LayoutNode, PresetLayout } from "../lib/layout";
 import { ContextMenu } from "./Dialogs";
 import UpdateButton from "./UpdateButton";
 
 const LAYOUTS = [
-  ["single", "1画面", Square],
-  ["cols2", "左右", Columns2],
-  ["rows2", "上下", Rows2],
+  ["row", "左右に分割", Columns2, "左右に分割（もう一度押すと元に戻す・右クリックで3分割）"],
+  ["col", "上下に分割", Rows2, "上下に分割（もう一度押すと元に戻す） ⌘⌥\\"],
 ] as const;
 
 const RECENT_KEY = "mdock.recentFolders";
@@ -34,11 +33,12 @@ type Props = {
   onPickFolder: () => void;
   onOpenFolder: (dir: string) => void;
   onLayout: (layout: PresetLayout) => void;
+  onToggleSplit: (dir: "row" | "col") => void;
   onSettings: () => void;
   beforeRestart: () => Promise<unknown>;
 };
 
-export default function WindowBar({ root, branch, error, layout, sidebarOpen, ready, onToggleSidebar, onPickFolder, onOpenFolder, onLayout, onSettings, beforeRestart }: Props) {
+export default function WindowBar({ root, branch, error, layout, sidebarOpen, ready, onToggleSidebar, onPickFolder, onOpenFolder, onLayout, onToggleSplit, onSettings, beforeRestart }: Props) {
   const [recent, setRecent] = useState<string[] | null>(null);
   const [layoutMenu, setLayoutMenu] = useState<{ x: number; y: number } | null>(null);
   const folderMenu = useRef<HTMLDivElement>(null);
@@ -73,10 +73,7 @@ export default function WindowBar({ root, branch, error, layout, sidebarOpen, re
     };
   }, [folderOpen]);
 
-  const selected = layout.type === "pane" ? "single"
-    : layout.children.length === 2 && layout.children.every((c) => c.type === "pane")
-      ? layout.dir === "row" ? "cols2" : "rows2"
-      : null;
+  const selected = layout.type === "split" ? layout.dir : null;
 
   return (
     <header className="toolbar" data-tauri-drag-region>
@@ -120,9 +117,9 @@ export default function WindowBar({ root, branch, error, layout, sidebarOpen, re
           e.preventDefault();
           setLayoutMenu({ x: e.clientX, y: e.clientY });
         }}>
-        {LAYOUTS.map(([kind, label, Icon]) => (
-          <button key={kind} onClick={() => onLayout(kind)} className={selected === kind ? "on" : ""}
-            title={`${label}（右クリックで3分割）`} aria-label={label} aria-pressed={selected === kind}>
+        {LAYOUTS.map(([dir, label, Icon, title]) => (
+          <button key={dir} onClick={() => onToggleSplit(dir)} className={selected === dir ? "on" : ""}
+            title={title} aria-label={label} aria-pressed={selected === dir}>
             <Icon size={15} />
           </button>
         ))}

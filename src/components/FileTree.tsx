@@ -11,8 +11,6 @@ import type { GitLookup, GitMark } from "../lib/git";
 type Props = {
   root: string;
   entries: Entry[];
-  mdOnly: boolean;
-  onFilter: (mdOnly: boolean) => void;
   openPaths: string[];
   onOpen: (path: string, otherPane: boolean, newTab: boolean) => void;
   /** ファイルを作った・消したなど、ツリーを読み直してほしいとき */
@@ -24,16 +22,6 @@ type Props = {
   git: GitLookup;
 };
 
-/** md を含まないフォルダは「md だけ表示」のとき隠す（作ったばかりのものは keep で残す） */
-function filter(entries: Entry[], mdOnly: boolean, keep: Set<string>): Entry[] {
-  if (!mdOnly) return entries;
-  return entries.flatMap((e) => {
-    if (!e.is_dir) return isMarkdown(e.name) || keep.has(e.path) ? [e] : [];
-    const children = filter(e.children, mdOnly, keep);
-    return children.length || keep.has(e.path) ? [{ ...e, children }] : [];
-  });
-}
-
 type Creating = { dir: string; isDir: boolean };
 type Row =
   | { kind: "entry"; entry: Entry; depth: number; parent: string }
@@ -41,31 +29,25 @@ type Row =
 
 const ROW_H = 28;
 
-export function ExplorerControls({ mdOnly, onFilter, onCreate, onCollapse }: Pick<Props, "mdOnly" | "onFilter"> & {
+export function ExplorerControls({ onCreate, onCollapse }: {
   onCreate?: (isDir: boolean) => void;
   onCollapse?: () => void;
 }) {
   return (
-    <>
-      <div className="sidebar-head">
-        <span className="sidebar-label">エクスプローラー</span>
-        <div className="explorer-actions">
-          <button className="icon-btn" title="新規ファイル" aria-label="新規ファイル" disabled={!onCreate} onClick={() => onCreate?.(false)}>
-            <FilePlus size={15} />
-          </button>
-          <button className="icon-btn" title="新規フォルダ" aria-label="新規フォルダ" disabled={!onCreate} onClick={() => onCreate?.(true)}>
-            <FolderPlus size={15} />
-          </button>
-          <button className="icon-btn" title="フォルダをすべて閉じる" aria-label="フォルダをすべて閉じる" disabled={!onCollapse} onClick={onCollapse}>
-            <ChevronsDownUp size={15} />
-          </button>
-        </div>
+    <div className="sidebar-head">
+      <span className="sidebar-label">エクスプローラー</span>
+      <div className="explorer-actions">
+        <button className="icon-btn" title="新規ファイル" aria-label="新規ファイル" disabled={!onCreate} onClick={() => onCreate?.(false)}>
+          <FilePlus size={15} />
+        </button>
+        <button className="icon-btn" title="新規フォルダ" aria-label="新規フォルダ" disabled={!onCreate} onClick={() => onCreate?.(true)}>
+          <FolderPlus size={15} />
+        </button>
+        <button className="icon-btn" title="フォルダをすべて閉じる" aria-label="フォルダをすべて閉じる" disabled={!onCollapse} onClick={onCollapse}>
+          <ChevronsDownUp size={15} />
+        </button>
       </div>
-      <div className="segmented tree-filter" role="group" aria-label="表示するファイル">
-        <button className={mdOnly ? "on" : ""} aria-pressed={mdOnly} onClick={() => onFilter(true)}>.md のみ</button>
-        <button className={!mdOnly ? "on" : ""} aria-pressed={!mdOnly} onClick={() => onFilter(false)}>すべて</button>
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -73,19 +55,17 @@ export function ExplorerControls({ mdOnly, onFilter, onCreate, onCollapse }: Pic
  * ファイルツリー。展開している行を平らなリストにして、見えている行だけ描く（1万ファイルでも軽い）。
  * ↑↓ で移動、→← で開閉、Enter で開く。右クリックでファイル操作。
  */
-export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, onOpen, onChanged, onRenamed, onError, git }: Props) {
+export default function FileTree({ root, entries, openPaths, onOpen, onChanged, onRenamed, onError, git }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [expandTop, setExpandTop] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [keep, setKeep] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   const isOpen = (e: Entry, depth: number) => open[e.path] ?? (expandTop && depth === 0);
 
-  const shown = useMemo(() => filter(entries, mdOnly, keep), [entries, mdOnly, keep]);
   const rows = useMemo(() => {
     const out: Row[] = [];
     if (creating && norm(creating.dir) === norm(root)) out.push({ kind: "create", dir: root, isDir: creating.isDir, depth: 0 });
@@ -98,10 +78,10 @@ export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, o
         }
       }
     };
-    walk(shown, 0, root);
+    walk(entries, 0, root);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown, open, creating, root, expandTop]);
+  }, [entries, open, creating, root, expandTop]);
 
   const virt = useVirtualizer({
     count: rows.length,
@@ -141,7 +121,6 @@ export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, o
     if (!c || !name.trim()) return;
     try {
       const path = await createEntry(c.dir, name, c.isDir);
-      setKeep((k) => new Set(k).add(path));
       setSelected(path);
       onChanged();
       if (!c.isDir) onOpen(path, false, false);
@@ -155,7 +134,6 @@ export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, o
     if (!name.trim() || name === old) return;
     try {
       const to = await renameEntry(path, name);
-      setKeep((k) => new Set(k).add(to));
       setSelected(to);
       onRenamed(path, to);
       onChanged();
@@ -252,14 +230,14 @@ export default function FileTree({ root, entries, mdOnly, onFilter, openPaths, o
 
   return (
     <>
-      <ExplorerControls mdOnly={mdOnly} onFilter={onFilter} onCreate={createInSelection} onCollapse={() => {
+      <ExplorerControls onCreate={createInSelection} onCollapse={() => {
         setExpandTop(false);
         setOpen({});
         setCreating(null);
       }} />
-      {!shown.length && !creating ? (
+      {!entries.length && !creating ? (
         <div className="tree-empty" onContextMenu={(ev) => openMenu(ev, null)}>
-          {mdOnly ? "Markdown ファイルがありません" : "ファイルがありません"}
+          ファイルがありません
           {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
         </div>
       ) : (
