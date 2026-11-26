@@ -175,8 +175,9 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .folder-search-count { margin-left: auto; }
 .folder-search-match { padding-left: 25px; font-size: 12px; }
 .folder-search-match > * { white-space: pre; }
-.folder-search-before { max-width: 30%; direction: rtl; }
-.folder-search-after { min-width: 0; flex: 0 1 auto; }
+/* 一致の前は左側を省略して一致の近くを見せる（「…前の文 一致」） */
+.folder-search-before { flex: 0 1 auto; min-width: 0; max-width: 60%; direction: rtl; }
+.folder-search-after { min-width: 0; flex: 1 1 0; }
 .folder-search-match mark { min-width: 0; flex: 0 0 auto; max-width: 70%; background: var(--find); color: var(--fg); }
 .folder-search-match mark:empty { width: 2px; height: 1em; }
 .markdown-body .folder-search-jump { outline: 1px solid var(--accent); background-color: var(--accent-soft); }

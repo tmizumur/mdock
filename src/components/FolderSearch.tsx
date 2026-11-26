@@ -121,12 +121,15 @@ export default function FolderSearch({ root, onClose, onOpen }: Props) {
               </button>
               {!folded && matches.map((hit) => {
                 const { before, match, after } = splitMatch(hit);
+                // 右から左の省略表示では末尾の空白が消えるので、空白は外に出す
+                const gap = /\s*$/.exec(before)?.[0] ?? "";
                 return (
                   <button className="folder-search-match" type="button" key={`${hit.line}:${hit.column}`}
                     title={hit.text} onClick={(e) => onOpen(path, {
                       line: hit.line, column: hit.column, length: hit.length, query, matchText: match,
                     }, e.metaKey)}>
-                    <span className="folder-search-before"><bdi>{before}</bdi></span>
+                    <span className="folder-search-before"><bdi>{before.slice(0, before.length - gap.length)}</bdi></span>
+                    {gap && <span className="folder-search-gap">{gap}</span>}
                     <mark>{match}</mark>
                     <span className="folder-search-after">{after}</span>
                   </button>
