@@ -63,7 +63,7 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY --repo tmizumur/mdock < ~/.tauri/mdock.k
 
 ## 開発
 
-必要なもの: Node.js 20 以上、Rust（`rustup`）、Xcode Command Line Tools
+必要なもの: Node.js 22 以上、Rust（`rustup`）、Xcode Command Line Tools
 
 ```bash
 npm install

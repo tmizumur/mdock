@@ -4,9 +4,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type useUnsavedDialog } from "../components/Dialogs";
 import { readText, writeText } from "../lib/api";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader } from "../lib/dnd";
-import { type PresetLayout, type Side, PRESET_COUNT, flipOuter, leaves, presetLayout, setSizes, splitLeaf } from "../lib/layout";
+import { type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, setSizes, splitLeaf } from "../lib/layout";
 import { type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, newId, tabTitle } from "../lib/tabs";
-import { type Workspace, activeAfterRemove, allTabs, cloneTab, dropIfEmpty, mapPanes, newPaneId } from "../lib/workspace";
+import { type Workspace, activeAfterRemove, allTabs, cloneTab, closeTabIn, dropIfEmpty, mapPanes, newPaneId, resetLayoutIn, toggleSplitIn } from "../lib/workspace";
 
 export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], setError: (error: string | null) => void) {
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
@@ -176,24 +176,16 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     return r.w;
   };
 
-  const removeTab = (paneId: string, tabId: string) => {
-    scrolls.current.delete(tabId);
-    apply((w) => {
-      const p = w.panes[paneId];
-      const k = p?.tabs.findIndex((t) => t.id === tabId) ?? -1;
-      if (k < 0) return w;
-      const tabs = p.tabs.filter((t) => t.id !== tabId);
-      const next = { ...w, panes: { ...w.panes, [paneId]: { tabs, active: activeAfterRemove(p.active, k, tabs.length) } } };
-      // 最後のタブを閉じたらペインも消す（隣が広がる）
-      return commitRemoveIfEmpty(next, paneId);
-    });
-  };
-
   const closeTab = async (paneId: string, tabIdx: number) => {
     const t = wsRef.current.panes[paneId]?.tabs[tabIdx];
     if (!t) return;
     if (!(await confirmDirty([t]))) return;
-    removeTab(paneId, t.id);
+    scrolls.current.delete(t.id);
+    apply((w) => {
+      const r = closeTabIn(w, paneId, t.id, activeRef.current);
+      if (r.focus) focusPane(r.focus);
+      return r.w;
+    });
   };
 
   /** ⌘W: 今のタブを閉じる。ペインが空なら（ほかにペインがあれば）ペインを閉じ、何もなければウィンドウを閉じる */
@@ -282,45 +274,28 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     focusPane(paneId);
   };
 
-  /** レイアウトのリセット（1画面 / 左右 / 上下 / 3分割）。入りきらないペインのタブは最後のペインに寄せる */
-  const resetLayout = (kind: PresetLayout) => {
-    let focus: string | undefined;
-    apply((w) => {
-      const o = leaves(w.layout);
-      const n = PRESET_COUNT[kind];
-      const cur = w.panes[activeRef.current] ? activeRef.current : o[0];
-      const keep = kind === "single" ? [cur] : o.slice(0, n);
-      const sink = keep[keep.length - 1];
-      while (keep.length < n) keep.push(newPaneId());
-      const panes: Record<string, PaneState> = {};
-      for (const id of keep) panes[id] = w.panes[id] ?? emptyPane();
-      const s = panes[sink];
-      const tabs = [...s.tabs];
-      for (const id of o) {
-        if (keep.includes(id)) continue;
-        for (const t of w.panes[id].tabs) {
-          // 同じファイルを未編集で開いているだけなら、まとめる
-          const dup = t.kind === "doc" && !isDirty(t) && tabs.some((x) => x.kind === "doc" && x.path === t.path);
-          if (dup) scrolls.current.delete(t.id);
-          else tabs.push(t);
-        }
-      }
-      panes[sink] = { tabs, active: Math.min(s.active, Math.max(0, tabs.length - 1)) };
-      if (!keep.includes(cur)) focus = sink;
-      return { layout: presetLayout(kind, keep), panes };
-    });
+  const newPresetIds = (w: Workspace, count: number) => ({
+    panes: Array.from({ length: Math.max(0, count - leaves(w.layout).length) }, newPaneId),
+    split: newNodeId("s"),
+  });
+
+  const applyLayoutChange = ({ w, focus, discardedTabIds }: ReturnType<typeof resetLayoutIn>) => {
+    for (const id of discardedTabIds ?? []) scrolls.current.delete(id);
+    apply(() => w);
     if (focus) focusPane(focus);
   };
 
+  /** レイアウトのリセット（1画面 / 左右 / 上下 / 3分割） */
+  const resetLayout = (kind: PresetLayout) => {
+    const w = wsRef.current;
+    const split = kind === "single" ? undefined : { kind, ids: newPresetIds(w, PRESET_COUNT[kind]) };
+    applyLayoutChange(resetLayoutIn(w, activeRef.current, split));
+  };
+
   const toggleSplit = (dir: "row" | "col") => {
-    const { layout } = wsRef.current;
-    if (layout.type === "pane") {
-      resetLayout(dir === "row" ? "cols2" : "rows2");
-    } else if (layout.dir === dir) {
-      resetLayout("single");
-    } else {
-      apply((w) => ({ ...w, layout: flipOuter(w.layout, dir) }));
-    }
+    const w = wsRef.current;
+    const ids = w.layout.type === "pane" ? newPresetIds(w, 2) : undefined;
+    applyLayoutChange(toggleSplitIn(w, activeRef.current, dir, ids));
   };
 
   /** ツリーで名前を変えたら、そのファイル（フォルダならその中）を開いているタブのパスも直す */

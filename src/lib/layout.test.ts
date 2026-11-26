@@ -1,19 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { flipOuter, leaves, presetLayout, removeLeaf, splitLeaf } from "./layout";
+import { type DocTab } from "./tabs";
+import { type Workspace, toggleSplitIn } from "./workspace";
 
 describe("分割レイアウト", () => {
   it.each([
-    { preset: "cols2", first: "row", next: "col" },
-    { preset: "rows2", first: "col", next: "row" },
-  ] as const)("$preset で分割し、向きを切り替えてから単一ペインに戻す", ({ preset, first, next }) => {
-    const single = presetLayout("single", ["main"]);
-    const split = presetLayout(preset, ["main", "other"]);
-    const flipped = flipOuter(split, next);
+    { first: "row", next: "col" },
+    { first: "col", next: "row" },
+  ] as const)("$first で分割して $next に切り替え、同じ向きでもう一度押すとタブを引き継いで単一ペインに戻る", ({ first, next }) => {
+    const tab: DocTab = { kind: "doc", id: "notes", path: "/notes.md", mode: "view", content: "", saved: "" };
+    const guide = { ...tab, id: "guide", path: "/guide.md" };
+    const todo = { ...tab, id: "todo", path: "/todo.md" };
+    const single: Workspace = {
+      layout: { type: "pane", id: "main" },
+      panes: { main: { tabs: [tab], active: 0 } },
+    };
+    const { w: split } = toggleSplitIn(single, "main", first, { panes: ["other"], split: "split" });
+    const withTabs = { ...split, panes: { ...split.panes, other: { tabs: [guide, todo], active: 1 } } };
+    const { w: flipped } = toggleSplitIn(withTabs, "other", next);
 
-    expect(split).toMatchObject({ type: "split", dir: first, sizes: [50, 50] });
-    expect(flipped).toMatchObject({ type: "split", dir: next, sizes: [50, 50] });
-    expect(leaves(flipped)).toEqual(["main", "other"]);
-    expect(presetLayout("single", [leaves(flipped)[0]])).toEqual(single);
+    expect(split.layout).toMatchObject({ type: "split", dir: first, sizes: [50, 50] });
+    expect(flipped.layout).toMatchObject({ type: "split", dir: next, sizes: [50, 50] });
+    expect(leaves(flipped.layout)).toEqual(["main", "other"]);
+
+    const collapsed = toggleSplitIn(flipped, "other", next);
+    expect(collapsed.w).toEqual({
+      layout: { type: "pane", id: "other" },
+      panes: { other: { tabs: [guide, todo, tab], active: 1 } },
+    });
+    expect(collapsed.focus).toBeUndefined();
   });
 
   it("向きの切り替えで同じ向きになった子の分割をまとめる", () => {

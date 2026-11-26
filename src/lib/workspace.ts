@@ -1,5 +1,5 @@
-import { type LayoutNode, leaves, newNodeId, removeLeaf } from "./layout";
-import { type PaneState, type Tab, newId } from "./tabs";
+import { type LayoutNode, type PresetLayout, type SplitNode, PRESET_COUNT, flipOuter, leaves, newNodeId, presetLayout, removeLeaf } from "./layout";
+import { type PaneState, type Tab, emptyPane, isDirty, newId } from "./tabs";
 
 /** ペインの集まりと、その並べ方（分割ツリー） */
 export type Workspace = { panes: Record<string, PaneState>; layout: LayoutNode };
@@ -44,4 +44,59 @@ export function dropIfEmpty(w: Workspace, id: string): { w: Workspace; neighbor?
   const k = order.indexOf(id);
   const { [id]: _gone, ...panes } = w.panes;
   return { w: { layout: removeLeaf(w.layout, id), panes }, neighbor: order[k - 1] ?? order[k + 1] };
+}
+
+/** タブを閉じ、前面のペインが消えたら隣を前面にする */
+export function closeTabIn(w: Workspace, paneId: string, tabId: string, activePane: string): { w: Workspace; focus?: string } {
+  const p = w.panes[paneId];
+  const k = p?.tabs.findIndex((t) => t.id === tabId) ?? -1;
+  if (k < 0) return { w };
+  const tabs = p.tabs.filter((t) => t.id !== tabId);
+  const next = { ...w, panes: { ...w.panes, [paneId]: { tabs, active: activeAfterRemove(p.active, k, tabs.length) } } };
+  const r = dropIfEmpty(next, paneId);
+  return { w: r.w, focus: activePane === paneId ? r.neighbor : undefined };
+}
+
+type PresetSplitIds = { panes: string[]; split: string };
+type LayoutChange = { w: Workspace; focus?: string; discardedTabIds?: string[] };
+
+/** 入りきらないペインのタブを最後のペインに寄せる */
+export function resetLayoutIn(
+  w: Workspace,
+  activePane: string,
+  split?: { kind: Exclude<PresetLayout, "single">; ids: PresetSplitIds },
+): LayoutChange {
+  const order = leaves(w.layout);
+  const cur = w.panes[activePane] ? activePane : order[0];
+  const keep = split ? order.slice(0, PRESET_COUNT[split.kind]) : [cur];
+  const sink = keep[keep.length - 1];
+  if (split) keep.push(...split.ids.panes);
+  const panes: Record<string, PaneState> = {};
+  for (const id of keep) panes[id] = w.panes[id] ?? emptyPane();
+  const s = panes[sink];
+  const tabs = [...s.tabs];
+  const discardedTabIds: string[] = [];
+  for (const id of order) {
+    if (keep.includes(id)) continue;
+    for (const t of w.panes[id].tabs) {
+      // 同じファイルを未編集で開いているだけなら、まとめる
+      const dup = t.kind === "doc" && !isDirty(t) && tabs.some((x) => x.kind === "doc" && x.path === t.path);
+      if (dup) discardedTabIds.push(t.id);
+      else tabs.push(t);
+    }
+  }
+  panes[sink] = { tabs, active: Math.min(s.active, Math.max(0, tabs.length - 1)) };
+  return {
+    w: { layout: presetLayout(split?.kind ?? "single", keep, split?.ids.split), panes },
+    focus: keep.includes(cur) ? undefined : sink,
+    discardedTabIds,
+  };
+}
+
+export function toggleSplitIn(w: Workspace, activePane: string, dir: SplitNode["dir"], ids?: PresetSplitIds): LayoutChange {
+  if (w.layout.type === "pane") {
+    return ids ? resetLayoutIn(w, activePane, { kind: dir === "row" ? "cols2" : "rows2", ids }) : { w };
+  }
+  if (w.layout.dir === dir) return resetLayoutIn(w, activePane);
+  return { w: { ...w, layout: flipOuter(w.layout, dir) } };
 }
