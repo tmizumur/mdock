@@ -11,6 +11,7 @@
   --fg-faint: #8B9099;
   --accent: #8AA4FF;
   --accent-soft: rgba(138, 164, 255, 0.12);
+  --scrollbar-thumb: color-mix(in srgb, var(--fg-faint) 65%, transparent);
   --tree-selected: rgba(138, 164, 255, 0.14);
   --git-modified: #E5C07B;
   --git-added: #7FD39A;
@@ -49,6 +50,7 @@
 
   color-scheme: dark;
   accent-color: var(--accent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   font-family: var(--font-ui);
   font-size: 14px;
   color: var(--fg);
@@ -57,6 +59,21 @@
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+
+/* WebKit 系では幅とホバー時の色も指定する。 */
+@supports selector(::-webkit-scrollbar) {
+  :root { scrollbar-color: auto; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: var(--radius-small); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+}
+
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--fg); }
+input::placeholder, textarea::placeholder { color: var(--fg-faint); opacity: 1; }
+button:focus-visible, .tab:focus-visible, input:not(.tree-input):focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 .app { display: flex; flex-direction: column; height: 100%; border-radius: var(--radius-window); overflow: hidden; }
 
@@ -257,6 +274,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .markdown-body img { max-width: 100%; }
 .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
 .markdown-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+.markdown-body input[type="checkbox"] { accent-color: var(--accent); opacity: 1; }
 
 /* 更新ボタン */
 .update-btn { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; border-radius: 999px; white-space: nowrap; }
@@ -271,6 +289,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   padding: 4px 4px 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-small);
   background: var(--bg-elev); box-shadow: var(--shadow);
 }
+.find-bar:focus-within { border-color: var(--accent); }
 .find-bar input {
   width: 200px; border: none; outline: none; background: none; color: var(--fg); font: inherit; font-size: 13px;
 }
@@ -499,7 +518,10 @@ body.dragging-item, body.dragging-item * { cursor: grabbing !important; user-sel
 .update-notes.markdown-body h1, .update-notes.markdown-body h2, .update-notes.markdown-body h3 { font-size: 1em; border: none; margin: 0.4em 0; padding: 0; }
 .update-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 .update-actions { display: flex; align-items: center; gap: 8px; }
-.update-actions progress { flex: 1; height: 6px; accent-color: var(--accent); }
+.update-actions progress { appearance: none; flex: 1; height: 6px; border: 0; border-radius: 999px; background: var(--bg-elev); }
+.update-actions progress::-webkit-progress-bar { background: var(--bg-elev); border-radius: 999px; }
+.update-actions progress::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+.update-actions progress::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
 
 /* 設定画面 */
 .settings {
@@ -535,7 +557,6 @@ body.dragging-item, body.dragging-item * { cursor: grabbing !important; user-sel
 .settings-row > :is(.segmented, .btn) { flex-shrink: 0; }
 .settings-stepper { font-variant-numeric: tabular-nums; }
 .settings-stepper button:nth-child(2) { min-width: 48px; }
-.settings :is(button, input):focus-visible, .modal button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-row input[role="switch"] {
   appearance: none; display: flex; align-items: center; flex: 0 0 40px; width: 40px; height: 24px; margin: 0;
   padding: 3px; background: var(--bg-hover); border-radius: 999px; cursor: pointer; transition: var(--color-transition);
