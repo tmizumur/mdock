@@ -81,7 +81,6 @@ const editorTheme = EditorView.theme({
   ".cm-panel button[name=close]": { color: "var(--fg-muted)" },
   ".cm-panel button[name=close]:hover": { color: "var(--fg)" },
   ".cm-panel label": { color: "var(--fg-muted)" },
-  ".cm-panel input[type=checkbox]": { accentColor: "var(--accent)" },
   ".cm-textfield::placeholder": { color: "var(--fg-faint)", opacity: "1" },
   ".cm-textfield:focus": { borderColor: "var(--accent)", outline: "none" },
   ".cm-tooltip, .cm-tooltip-autocomplete": { backgroundColor: "var(--bg-side)", border: "1px solid var(--border)", color: "var(--fg)" },

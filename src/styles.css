@@ -280,13 +280,16 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .markdown-body img { max-width: 100%; }
 .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
 .markdown-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
-.markdown-body input[type="checkbox"] {
+.markdown-body input[type="checkbox"],
+.cm-editor .cm-panel.cm-search input[type="checkbox"] {
   appearance: none; display: inline-grid; place-items: center;
   width: 14px; height: 14px; margin: 0 0.4em 0 0; vertical-align: middle;
   border: 1px solid var(--fg-faint); border-radius: 4px; background: var(--bg-elev); opacity: 1;
 }
-.markdown-body input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
-.markdown-body input[type="checkbox"]:checked::before {
+.markdown-body input[type="checkbox"]:checked,
+.cm-editor .cm-panel.cm-search input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.markdown-body input[type="checkbox"]:checked::before,
+.cm-editor .cm-panel.cm-search input[type="checkbox"]:checked::before {
   content: ""; width: 4px; height: 7px;
   border: solid var(--bg); border-width: 0 2px 2px 0;
   transform: translateY(-1px) rotate(45deg);
