@@ -115,6 +115,7 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, onScroll
           anchor={tab.anchor}
           line={tab.mode === "view" ? tab.line : undefined}
           onAnchorScrolled={cancelRestore}
+          eager={initialScroll > 0}
           find={find.open ? { query: find.query, index: find.index } : undefined}
           onFindResult={setResult}
           onRendered={() => setVersion((v) => v + 1)}

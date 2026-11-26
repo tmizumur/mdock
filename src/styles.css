@@ -293,6 +293,8 @@ button.outline-toggle:hover { color: var(--fg); }
 .markdown-body { max-width: 860px; margin: 0 auto; padding: 24px 40px 80px; line-height: var(--doc-line-height); font-size: var(--doc-font-size); word-wrap: break-word; }
 .markdown-body.width-wide { max-width: 1200px; }
 .markdown-body.width-full { max-width: none; }
+/* 長い文書を少しずつ描くための塊（レイアウトには影響させない） */
+.md-chunk { display: contents; }
 /* 狭いペインでは本文の左右の余白を縮める */
 @container (max-width: 560px) { .markdown-body { padding-inline: 20px; } }
 @container (max-width: 380px) { .markdown-body { padding-inline: 12px; } }
