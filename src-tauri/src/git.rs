@@ -145,14 +145,71 @@ fn git_bin() -> Option<&'static PathBuf> {
     .as_ref()
 }
 
-fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new(git_bin()?)
+fn git_command(dir: &Path) -> Option<Command> {
+    let mut command = Command::new(git_bin()?);
+    command
         .current_dir(dir)
+        .env_remove("GIT_CONFIG")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env("SSH_ASKPASS", "")
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .env("GIT_PAGER", "cat")
+        .env("GIT_ALLOW_PROTOCOL", "")
+        .env("GIT_NO_LAZY_FETCH", "1")
         // status でインデックスを書き換えない（書き換えると監視が反応して何度も読み直してしまう）
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(args)
-        .output()
-        .ok()?;
+        .args([
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "diff.external=",
+            "-c",
+            "core.pager=cat",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "core.sshCommand=false",
+        ]);
+    Some(command)
+}
+
+fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let mut command = git_command(dir)?;
+    if args.first() == Some(&"status") {
+        // インデックスを書き込まなくても、変更確認中に外部フィルターが動く。
+        let keys = git(
+            dir,
+            &["config", "--includes", "--null", "--name-only", "--list"],
+        )?;
+        for key in std::str::from_utf8(&keys).ok()?.split_terminator('\0') {
+            let Some((_, setting)) = key
+                .strip_prefix("filter.")
+                .and_then(|key| key.rsplit_once('.'))
+            else {
+                continue;
+            };
+            let value = match setting {
+                "clean" | "smudge" | "process" => "",
+                "required" => "false",
+                _ => continue,
+            };
+            if key.contains('=') {
+                return None;
+            }
+            command.arg("-c").arg(format!("{key}={value}"));
+        }
+    }
+    let out = command.args(args).output().ok()?;
+    // safe.directory で拒否された場合も表示を省く。
     out.status.success().then_some(out.stdout)
 }
 
@@ -188,7 +245,7 @@ pub fn status(
         .to_string_lossy()
         .replace('\\', "/");
     // 件数を表示するときは、未追跡フォルダの中もファイル単位で数える。
-    let mut args = vec!["status", "--porcelain=v1", "-z"];
+    let mut args = vec!["status", "--porcelain=v1", "-z", "--ignore-submodules=all"];
     if include_ignored {
         args.push("--ignored=matching");
     }
@@ -339,5 +396,66 @@ mod tests {
         assert_eq!(deleted, 1);
         assert!(!entries.iter().any(|e| e.path.ends_with("/gone.md")));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_disables_external_programs() {
+        use std::fs::{self, FileTimes, Permissions};
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, SystemTime};
+
+        if git_bin().is_none() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("mdock-git-safety-{}", std::process::id()));
+        fs::create_dir(&base).unwrap();
+        let run = |args: &[&str]| git(&base, args).unwrap_or_else(|| panic!("git {args:?}"));
+        run(&["init", "-q", "--template="]);
+        let file = base.join("a.md");
+        fs::write(&file, "a").unwrap();
+        run(&["add", "a.md"]);
+        // 内容を変えず、Git が比較のためにフィルターを使う状態にする。
+        fs::File::open(&file)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(60)))
+            .unwrap();
+
+        fs::create_dir(base.join(".git/hooks")).unwrap();
+        for (script, marker) in [
+            (".git/fsmonitor", "fsmonitor-ran"),
+            (".git/hooks/post-index-change", "hook-ran"),
+            (".git/clean", "filter-ran"),
+        ] {
+            let script = base.join(script);
+            fs::write(&script, format!("#!/bin/sh\n: > .git/{marker}\n")).unwrap();
+            fs::set_permissions(script, Permissions::from_mode(0o700)).unwrap();
+        }
+        run(&["config", "core.fsmonitor", "./.git/fsmonitor"]);
+        run(&["config", "core.hooksPath", ".git/hooks"]);
+        run(&["config", "filter.test.clean", "./.git/clean"]);
+        run(&["config", "filter.test.required", "true"]);
+        fs::write(base.join(".gitattributes"), "a.md filter=test\n").unwrap();
+
+        let root = base.to_str().unwrap();
+        let index = fs::read(base.join(".git/index")).unwrap();
+        let (entries, _) = status(root, false, false).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.path.ends_with("/a.md") && entry.mark == Mark::A)
+        );
+        run(&["config", "--unset", "filter.test.clean"]);
+        run(&["config", "filter.test.process", "./.git/clean"]);
+        assert!(status(root, false, false).is_some());
+        assert_eq!(fs::read(base.join(".git/index")).unwrap(), index);
+        assert_eq!(
+            run(&["rev-parse", "--git-path", "hooks/post-index-change"]),
+            b"/dev/null/post-index-change\n"
+        );
+        for marker in ["fsmonitor-ran", "hook-ran", "filter-ran"] {
+            assert!(!base.join(".git").join(marker).exists(), "{marker}");
+        }
+        fs::remove_dir_all(base).unwrap();
     }
 }

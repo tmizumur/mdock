@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   hasMath,
   highlightBlock,
@@ -10,8 +11,9 @@ import {
   renderMarkdown,
   renderMermaidBlock,
 } from "../lib/markdown";
-import { copyText, isMarkdown, resolvePath, safeDecode } from "../lib/api";
+import { confirmOpenUrl, copyText, safeDecode, statPaths } from "../lib/api";
 import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find";
+import { classifyLink, localLinkAction } from "../lib/links";
 import { useSettings } from "../lib/settings";
 
 export type FindQuery = { query: string; index: number };
@@ -158,10 +160,11 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
   }, [query, find?.index]);
   useEffect(() => () => clearFindHighlights(id), [id]);
 
-  const onClick = (e: React.MouseEvent) => {
+  const onClick = async (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    const btn = target.closest<HTMLButtonElement>(".copy-btn");
+    const btn = target.closest<HTMLButtonElement>("button.copy-btn");
     if (btn) {
+      e.preventDefault();
       const code = btn.parentElement?.querySelector("pre")?.textContent ?? "";
       copyText(code).then(() => {
         btn.textContent = "コピーしました";
@@ -173,21 +176,34 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
       });
       return;
     }
-    const a = target.closest("a");
+    const a = target.closest("a, area");
     if (!a) return;
-    const href = a.getAttribute("href") ?? "";
-    if (!href) return;
+    const href = a.getAttribute("href");
+    if (href === null) return;
     e.preventDefault();
-    if (href.startsWith("#")) {
-      if (ref.current) findAnchor(ref.current, href.slice(1))?.scrollIntoView({ block: "start" });
-    } else if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("file:")) {
-      openUrl(href);
-    } else {
-      const raw = href.replace(/^file:\/\//, "");
-      const [file, hash] = raw.split("#");
-      const abs = resolvePath(path, safeDecode(file.split("?")[0]));
-      if (isMarkdown(abs)) onOpenLink(abs, hash, e.metaKey || e.ctrlKey); // ⌘+クリックで新しいタブ
-      else openPath(abs).catch((err) => console.warn("open", err)); // md 以外は既定のアプリで開く
+    if (!href) return;
+    const link = classifyLink(href, path);
+    const newTab = e.metaKey || e.ctrlKey;
+    try {
+      if (link.kind === "anchor") {
+        if (ref.current) findAnchor(ref.current, link.hash)?.scrollIntoView({ block: "start" });
+      } else if (link.kind === "external") {
+        await openUrl(link.url);
+      } else if (link.kind === "confirm-url") {
+        await confirmOpenUrl(link.url);
+      } else if (link.kind === "local") {
+        const [stat] = await statPaths([link.path]);
+        const action = localLinkAction(link.path, stat);
+        if (action === "markdown") {
+          onOpenLink(link.path, link.hash, newTab);
+        } else if (stat.exists && action === "reveal") {
+          if (await ask(`この項目を Finder で表示しますか？\n${link.path}`)) await revealItemInDir(link.path);
+        } else if (stat.exists) {
+          await openPath(link.path);
+        }
+      }
+    } catch (err) {
+      console.warn("open", err);
     }
   };
 
@@ -196,6 +212,9 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
       className={`markdown-body width-${settings.width} ${settings.wrap ? "wrap-code" : ""}`}
       ref={ref}
       onClick={onClick}
+      onAuxClick={(e) => {
+        if ((e.target as Element).closest("a, area")) e.preventDefault();
+      }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
