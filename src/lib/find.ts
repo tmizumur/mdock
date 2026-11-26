@@ -11,8 +11,8 @@ const MAX = 5000;
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** root の中で query に一致する範囲をすべて返す（大文字小文字は区別しない。要素をまたいでも見つける） */
-export function findRanges(root: HTMLElement, query: string): Range[] {
+/** root の中で query に一致する範囲をすべて返す（要素をまたいでも見つける） */
+export function findRanges(root: HTMLElement, query: string, caseSensitive = false): Range[] {
   if (!query) return [];
   const nodes: Text[] = [];
   const starts: number[] = [];
@@ -32,7 +32,7 @@ export function findRanges(root: HTMLElement, query: string): Range[] {
     starts.push(text.length);
     text += n.data;
   }
-  const re = new RegExp(escapeRe(query), "giu");
+  const re = new RegExp(escapeRe(query), caseSensitive ? "gu" : "giu");
   const ranges: Range[] = [];
   const locate = (pos: number): [Text, number] => {
     // pos を含むテキストノードを二分探索で探す

@@ -14,6 +14,8 @@ import {
 } from "../lib/markdown";
 import { confirmOpenUrl, copyText, safeDecode, statPaths } from "../lib/api";
 import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find";
+import { handledSearchLocations, previewMatchIndex, previewSearchBlock, SEARCH_HIGHLIGHT_MS, sourceMatch } from "../lib/folderSearch";
+import type { SearchLocation } from "../lib/folderSearch";
 import { classifyLink, localLinkAction } from "../lib/links";
 import { FILES_CHANGED, pathKey } from "../lib/liveReload";
 import { useSettings } from "../lib/settings";
@@ -34,6 +36,7 @@ type Props = {
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンク） */
   anchor?: { id: string; nonce: number };
   onAnchorScrolled?: () => void;
+  line?: SearchLocation;
   find?: FindQuery;
   onFindResult?: (r: FindResult) => void;
   /** 描画し直したとき（見出しの位置などが変わったとき）に呼ぶ */
@@ -161,7 +164,7 @@ function lightboxMedia(image: HTMLImageElement | SVGSVGElement, animations: bool
 }
 
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */
-function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, find, onFindResult, onRendered, immediate = false }: Props) {
+function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, line, find, onFindResult, onRendered, immediate = false }: Props) {
   const ref = useRef<HTMLElement>(null);
   const lastAnchorNonce = useRef<number>(undefined);
   const { settings } = useSettings();
@@ -250,6 +253,54 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     target.scrollIntoView({ block: "start" });
     onAnchorScrolled?.();
   }, [anchor, html, onAnchorScrolled]);
+
+  // フォルダ検索で開いた行へ移動し、一致箇所を一時的に強調する。
+  useEffect(() => {
+    if (!line || handledSearchLocations.has(line)) return;
+    let clear: (() => void) | undefined;
+    let timer: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      if (!ref.current) return;
+      const target = previewSearchBlock(ref.current, line.line);
+      if (!target) return;
+      handledSearchLocations.add(line);
+      const { block, blockLine } = target;
+      const lines = source.split(/\r\n?|\n/);
+      const match = sourceMatch(lines[line.line] ?? "", line) ? line.matchText : "";
+      const index = previewMatchIndex(lines, blockLine, line, match);
+      const highlightId = `${id}-folder-search`;
+      const highlight = () => {
+        const ranges = findRanges(block, match, true);
+        const range = ranges[Math.min(index, ranges.length - 1)];
+        setFindHighlights(highlightId, range ? [range] : [], 0);
+        block.classList.toggle("folder-search-jump", !range || typeof Highlight === "undefined");
+        return range;
+      };
+      const range = highlight();
+      if (range && block instanceof HTMLDetailsElement) block.open = true;
+      const sc = scroller.current;
+      if (sc) {
+        const top = (range?.getBoundingClientRect() ?? block.getBoundingClientRect()).top;
+        sc.scrollTop += top - sc.getBoundingClientRect().top - sc.clientHeight / 3;
+      }
+      onAnchorScrolled?.();
+
+      // コードの色付けでテキストノードが置き換わる場合にも強調を保つ。
+      const observer = new MutationObserver(highlight);
+      observer.observe(block, { childList: true, subtree: true, characterData: true });
+      clear = () => {
+        observer.disconnect();
+        block.classList.remove("folder-search-jump");
+        clearFindHighlights(highlightId);
+      };
+      timer = window.setTimeout(clear, SEARCH_HIGHLIGHT_MS);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      clear?.();
+    };
+  }, [id, line, html, source, scroller, onAnchorScrolled]);
 
   // ファイル内検索
   const query = find?.query ?? "";

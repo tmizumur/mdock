@@ -218,6 +218,7 @@ export default function Pane(props: Props) {
                 key={tab.id}
                 ref={editor}
                 value={tab.content}
+                searchLocation={tab.line}
                 headings={editHeadings}
                 onOutline={onOutline}
                 onChange={onChange}
@@ -353,6 +354,7 @@ function SplitEditor({
           <Editor
             ref={editor}
             value={tab.content}
+            searchLocation={tab.line}
             onChange={onChange}
             initialScroll={initialScroll}
             onScroll={(top) => {

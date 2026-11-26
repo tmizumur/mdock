@@ -136,7 +136,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .sep.sep-h::after { inset: -3px 0; }
 
 /* サイドバー */
-.sidebar { height: 100%; display: flex; flex-direction: column; background: var(--bg-side); user-select: none; }
+.sidebar { position: relative; height: 100%; display: flex; flex-direction: column; background: var(--bg-side); user-select: none; }
 .sidebar-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 6px 8px 6px 12px; flex-shrink: 0;
@@ -146,6 +146,40 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 }
 .explorer-actions { display: flex; gap: 2px; }
 .explorer-actions .icon-btn { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; }
+.sidebar-explorer { display: contents; }
+.sidebar-explorer[inert] { visibility: hidden; }
+.folder-search {
+  position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg-side);
+}
+.folder-search-controls { display: flex; align-items: center; gap: 3px; margin: 0 8px; }
+.folder-search-controls input {
+  min-width: 0; flex: 1; padding: 5px 6px; border: 1px solid var(--border);
+  border-radius: var(--radius-small); background: var(--bg-elev); color: var(--fg);
+}
+.folder-search-controls .icon-btn { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; }
+.folder-search-controls .icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.folder-search-status { margin: 8px 10px 4px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.folder-search-status[role="alert"] { color: var(--danger); white-space: pre-wrap; overflow: auto; }
+.folder-search-results { overflow: auto; flex: 1; min-height: 0; padding: 0 6px 12px; }
+.folder-search-file, .folder-search-match {
+  display: flex; align-items: center; width: 100%; padding: 4px 6px; text-align: left; border: 0;
+  border-radius: var(--radius-row); background: transparent; color: var(--fg); cursor: pointer;
+}
+.folder-search-file:hover, .folder-search-match:hover { background: var(--bg-hover); }
+.folder-search-results button:focus-visible { outline-offset: -2px; }
+.folder-search-file { gap: 5px; font-size: 13px; }
+.folder-search-file svg, .folder-search-count { flex-shrink: 0; color: var(--fg-muted); }
+.folder-search-filename, .folder-search-path, .folder-search-match > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-search-filename { min-width: 50px; }
+.folder-search-path, .folder-search-count { color: var(--fg-muted); font-size: 11px; }
+.folder-search-count { margin-left: auto; }
+.folder-search-match { padding-left: 25px; font-size: 12px; }
+.folder-search-match > * { white-space: pre; }
+.folder-search-before { max-width: 30%; direction: rtl; }
+.folder-search-after { min-width: 0; flex: 0 1 auto; }
+.folder-search-match mark { min-width: 0; flex: 0 0 auto; max-width: 70%; background: var(--find); color: var(--fg); }
+.folder-search-match mark:empty { width: 2px; height: 1em; }
+.markdown-body .folder-search-jump { outline: 1px solid var(--accent); background-color: var(--accent-soft); }
 .tree { overflow: auto; flex: 1; min-height: 0; padding-bottom: 16px; outline: none; }
 .tree-item { position: absolute; top: 0; left: 0; right: 0; transition: transform var(--motion-layout) var(--ease-out); }
 .tree-row {

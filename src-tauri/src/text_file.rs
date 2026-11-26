@@ -93,8 +93,8 @@ pub(crate) struct TextInfo {
 }
 
 #[derive(Debug)]
-struct DecodedText<'a> {
-    text: Cow<'a, str>,
+pub(crate) struct DecodedText<'a> {
+    pub(crate) text: Cow<'a, str>,
     encoding: &'static str,
     bom: bool,
     lossy: bool,
@@ -183,7 +183,7 @@ fn detect(bytes: &[u8]) -> &'static Encoding {
     detector.guess(None, Utf8Detection::Deny)
 }
 
-fn decode(bytes: &[u8]) -> Result<DecodedText<'_>, FileError> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<DecodedText<'_>, FileError> {
     let (encoding, skip) = if let Some(bom) = Encoding::for_bom(bytes) {
         bom
     } else {

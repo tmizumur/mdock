@@ -6,6 +6,7 @@ import { type useUnsavedDialog } from "../components/Dialogs";
 import { type DiskStamp, parseFileError, readTextResult, writeText } from "../lib/api";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader } from "../lib/dnd";
 import { type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, setSizes, splitLeaf } from "../lib/layout";
+import type { SearchLocation } from "../lib/folderSearch";
 import { createOpenRequests } from "../lib/openRequests";
 import { type DiffSide, type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, newId, receiveDiffText, receiveDocText, tabTitle, textFormat } from "../lib/tabs";
 import { type Workspace, activeAfterRemove, allTabs, cloneTab, closeTabIn, dropIfEmpty, mapPanes, mapTabs, newPaneId, resetLayoutIn, toggleSplitIn } from "../lib/workspace";
@@ -14,6 +15,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
   const [activeIdx, setActiveIdx] = useState("p0");
   const [openRequests] = useState(createOpenRequests);
+  const lineNonce = useRef(0);
   /** タブごとのスクロール位置（タブ ID → px） */
   const scrolls = useRef(new Map<string, number>());
 
@@ -64,14 +66,19 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
    * split を指定すると、そのペインの横（上下）に新しいペインを作って開く。at はタブを入れる位置。
    */
   const openFile = useCallback(
-    async (path: string, paneId: string, opts: { newTab?: boolean; anchor?: string; split?: Side; at?: number } = {}) => {
+    async (path: string, paneId: string, opts: { newTab?: boolean; anchor?: string; line?: Omit<SearchLocation, "nonce">; split?: Side; at?: number } = {}) => {
       const anchor = opts.anchor ? { id: opts.anchor, nonce: Date.now() } : undefined;
+      const line = opts.line ? { ...opts.line, nonce: ++lineNonce.current } : undefined;
+      const withLocation = (p: PaneState, k: number) => ({
+        ...p, active: k,
+        tabs: anchor || line ? p.tabs.map((t, i) => (i === k && t.kind === "doc" ? { ...t, anchor, line } : t)) : p.tabs,
+      });
       const has = (p: PaneState | undefined) => (p ? p.tabs.findIndex((t) => t.kind === "doc" && t.path === path) : -1);
       const read = async (): Promise<DocTab> => {
         const { info, error } = await readTextResult(path);
         const text = info?.text ?? "";
         return {
-          id: newId(), kind: "doc", path, content: text, saved: text, mode: "view", anchor,
+          id: newId(), kind: "doc", path, content: text, saved: text, mode: "view", anchor, line,
           ...(info ? textFormat(info) : { readError: error }),
         };
       };
@@ -94,7 +101,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         if (status === "cleared" || (!latest && !insert) || !wsRef.current.panes[id]) return;
         updatePane(id, (p) => {
           const k = has(p);
-          if (k >= 0) return latest ? { ...p, active: k } : p;
+          if (k >= 0) return latest ? withLocation(p, k) : p;
           const cur = p.tabs[p.active];
           if (!insert && cur?.kind === "doc" && cur.id === previous && !isDirty(cur)) {
             scrolls.current.delete(cur.id);
@@ -107,10 +114,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         });
         if (!latest) return;
       } else {
-        updatePane(id, (p) => {
-          const k = has(p);
-          return { ...p, active: k, tabs: p.tabs.map((t, i) => (i === k && anchor && t.kind === "doc" ? { ...t, anchor } : t)) };
-        });
+        updatePane(id, (p) => withLocation(p, has(p)));
       }
       focusPane(id);
       setError(null);
@@ -391,12 +395,12 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   };
 
   /** ツリーのクリック: 今のペインのタブで開く。⌘+クリックは隣のペイン（1 ペインなら右に分割）、⌥+クリックは新しいタブ */
-  const onTreeOpen = (path: string, otherPaneClick: boolean, newTab: boolean) => {
+  const onTreeOpen = (path: string, otherPaneClick: boolean, newTab: boolean, line?: Omit<SearchLocation, "nonce">) => {
     const cur = livePane(activeRef.current);
-    if (!otherPaneClick) openFile(path, cur, { newTab });
+    if (!otherPaneClick) openFile(path, cur, { newTab, line });
     else {
       const op = otherPane(cur);
-      openFile(path, op ?? cur, op ? { newTab } : { split: "right" });
+      openFile(path, op ?? cur, op ? { newTab, line } : { split: "right", line });
     }
   };
 

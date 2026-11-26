@@ -1,11 +1,13 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { EditorView, basicSetup } from "codemirror";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment, EditorState, Prec } from "@codemirror/state";
+import { Decoration, type DecorationSet } from "@codemirror/view";
+import { foldedRanges, HighlightStyle, syntaxHighlighting, unfoldEffect } from "@codemirror/language";
+import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
 import { openSearchPanel } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { styleTags, tags } from "@lezer/highlight";
+import { handledSearchLocations, SEARCH_HIGHLIGHT_MS, sourceMatch, type SearchLocation } from "../lib/folderSearch";
 import { useSettings } from "../lib/settings";
 import type { markdownHeadings } from "../lib/markdown";
 import { editorTopLine, scrollEditorToLine } from "../lib/scrollSync";
@@ -14,6 +16,7 @@ import OverviewRuler, { type Heading } from "./OverviewRuler";
 
 type Props = {
   value: string;
+  searchLocation?: SearchLocation;
   onChange: (value: string) => void;
   /** 開いたときのスクロール位置 */
   initialScroll?: number;
@@ -49,6 +52,18 @@ const JA = EditorState.phrases.of({
   go: "移動",
 });
 
+const setSearchHighlight = StateEffect.define<DecorationSet>();
+const searchHighlight = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decorations, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setSearchHighlight)) return effect.value;
+    }
+    return decorations.map(transaction.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 const editorTheme = EditorView.theme({
   "&": { backgroundColor: "var(--bg)", color: "var(--fg)", colorScheme: "dark" },
   ".cm-scroller .cm-gutters": { backgroundColor: "var(--bg)", color: "var(--fg-faint)" },
@@ -61,6 +76,8 @@ const editorTheme = EditorView.theme({
   ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
   ".cm-searchMatch": { backgroundColor: "var(--find)" },
   ".cm-searchMatch-selected": { backgroundColor: "var(--accent)", color: "var(--bg)" },
+  ".cm-folder-search-match": { backgroundColor: "var(--accent)", color: "var(--bg)" },
+  ".cm-line.cm-folder-search-line": { backgroundColor: "var(--accent-soft)" },
   ".cm-searchMatch-selected span": { color: "inherit" },
   ".cm-scroller .cm-content": { caretColor: "var(--accent)" },
   ".cm-scroller .cm-cursor, .cm-scroller .cm-dropCursor": { borderLeftColor: "var(--accent)" },
@@ -115,7 +132,7 @@ const editorHighlightStyle = HighlightStyle.define([
 ]);
 
 /** CodeMirror 6 の Markdown エディタ */
-const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange, initialScroll, onScroll, headings, onOutline }, handle) {
+const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, searchLocation, onChange, initialScroll, onScroll, headings, onOutline }, handle) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -142,6 +159,7 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
           Prec.highest(syntaxHighlighting(editorHighlightStyle)),
           basicSetup,
           editorTheme,
+          searchHighlight,
           JA,
           markdown({
             codeLanguages: languages,
@@ -155,7 +173,7 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
       }),
     });
     view.current = v;
-    v.focus();
+    if (!searchLocation || handledSearchLocations.has(searchLocation)) v.focus();
     if (initialScroll) requestAnimationFrame(() => (v.scrollDOM.scrollTop = initialScroll));
     const scrolled = () => onScrollRef.current?.(v.scrollDOM.scrollTop);
     v.scrollDOM.addEventListener("scroll", scrolled, { passive: true });
@@ -186,6 +204,39 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ value, onChange
     while (b < max - a && cur.charCodeAt(cur.length - 1 - b) === value.charCodeAt(value.length - 1 - b)) b++;
     v.dispatch({ changes: { from: a, to: cur.length - b, insert: value.slice(a, value.length - b) } });
   }, [value]);
+
+  useEffect(() => {
+    if (!searchLocation || handledSearchLocations.has(searchLocation)) return;
+    let timer: number | undefined;
+    const clear = () => view.current?.dispatch({ effects: setSearchHighlight.of(Decoration.none) });
+    const frame = requestAnimationFrame(() => {
+      const v = view.current;
+      if (!v) return;
+      handledSearchLocations.add(searchLocation);
+      const doc = v.state.doc;
+      const line = doc.line(Math.min(searchLocation.line + 1, doc.lines));
+      const match = sourceMatch(line.text, searchLocation);
+      const from = match ? line.from + searchLocation.column : line.from;
+      const decoration = match
+        ? Decoration.mark({ class: "cm-folder-search-match" }).range(from, from + match.length)
+        : Decoration.line({ class: "cm-folder-search-line" }).range(line.from);
+      const unfold: StateEffect<unknown>[] = [];
+      foldedRanges(v.state).between(line.from, line.to, (from, to) => {
+        unfold.push(unfoldEffect.of({ from, to }));
+      });
+      v.dispatch({ effects: [
+        ...unfold,
+        setSearchHighlight.of(Decoration.set([decoration])),
+        EditorView.scrollIntoView(from, { y: "center" }),
+      ] });
+      timer = window.setTimeout(clear, SEARCH_HIGHLIGHT_MS);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      if (timer !== undefined) clear();
+    };
+  }, [searchLocation]);
 
   const [rulerHeadings, setRulerHeadings] = useState<Heading[]>([]);
   const [metrics, setMetrics] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });

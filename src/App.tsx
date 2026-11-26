@@ -1,6 +1,7 @@
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator, type PanelImperativeHandle } from "react-resizable-panels";
 import FileTree, { ExplorerControls } from "./components/FileTree";
+import FolderSearch from "./components/FolderSearch";
 import Pane, { type PaneOutline } from "./components/Pane";
 import Outline from "./components/Outline";
 import StatusBar from "./components/StatusBar";
@@ -29,6 +30,7 @@ export default function App() {
   const { ask, dialog } = useUnsavedDialog();
   const sidebarPanel = useRef<PanelImperativeHandle>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const workspace = useWorkspace(ask, setError);
   const {
@@ -50,8 +52,20 @@ export default function App() {
 
   const paneActions = usePaneActions(workspace);
   const { commands, menu, setMenu, openTabMenu, printPane } = paneActions;
-  const actions = useMenuActions(workspace, pickFiles, pickFolder, printPane, setSettingsOpen);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+  const toggleSearch = () => setSearchOpen((open) => !open);
+  const actions = useMenuActions(workspace, pickFiles, pickFolder, printPane, setSettingsOpen, toggleSearch);
   useShortcuts(workspace, paneActions, actions, updateSettings, setSettingsOpen, setError);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    sidebarPanel.current?.expand();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !e.isComposing && !document.querySelector("dialog[open]")) closeSearch();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen, ready, closeSearch]);
 
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
@@ -166,29 +180,36 @@ export default function App() {
           <Panel id="sidebar" defaultSize={264} minSize={248} maxSize={280} groupResizeBehavior="preserve-pixel-size" collapsible panelRef={sidebarPanel}
             onResize={(size) => setSidebarOpen(size.asPercentage > 0)}>
             <aside className="sidebar">
-              {root ? (
-                <FileTree
-                  key={root}
-                  root={root}
-                  entries={tree}
-                  openPaths={visiblePaths}
-                  onOpen={onTreeOpen}
-                  onLoadDirectory={loadDirectory}
-                  onChanged={refreshTree}
-                  onRenamed={onRenamed}
-                  onError={setError}
-                  git={git.lookup}
+              <div className="sidebar-explorer" inert={searchOpen}>
+                {root ? (
+                  <FileTree
+                    key={root}
+                    root={root}
+                    entries={tree}
+                    openPaths={visiblePaths}
+                    onOpen={onTreeOpen}
+                    onLoadDirectory={loadDirectory}
+                    onChanged={refreshTree}
+                    onRenamed={onRenamed}
+                    onError={setError}
+                    git={git.lookup}
+                  />
+                ) : (
+                  <>
+                    <ExplorerControls />
+                    <div className="tree-empty">
+                      <button className="btn" onClick={pickFolder}>フォルダを開く</button>
+                      <small>ここにフォルダをドロップしても開けます</small>
+                    </div>
+                  </>
+                )}
+                <Outline outline={activeOutline} />
+              </div>
+              {searchOpen && (
+                <FolderSearch key={root ?? ""} root={root} onClose={closeSearch}
+                  onOpen={(path, line, otherPane) => onTreeOpen(path, otherPane, false, line)}
                 />
-              ) : (
-                <>
-                  <ExplorerControls />
-                  <div className="tree-empty">
-                    <button className="btn" onClick={pickFolder}>フォルダを開く</button>
-                    <small>ここにフォルダをドロップしても開けます</small>
-                  </div>
-                </>
               )}
-              <Outline outline={activeOutline} />
             </aside>
           </Panel>
           <Separator className="sep" />
