@@ -23,16 +23,29 @@ export function loadHighlighter(): Promise<HighlighterGeneric<string, string>> {
         themes: [{
           ...dark,
           name: "mdock-dark",
+          // Shiki は CSS 変数を解決できないため、styles.css の --bg-code / --fg と同じ値を指定する。
           colors: { ...dark.colors, "editor.background": "#15161A", "editor.foreground": "#E7E8EB" },
           tokenColors: dark.tokenColors?.map((rule) => ({
             ...rule,
             settings: {
               ...rule.settings,
               foreground: ({
-                "#F97583": "#C3A6FF",
-                "#B392F0": "#8AA4FF",
-                "#9ECBFF": "#9FD8A8",
+                "#F97583": "#C3A6FF", // --code-keyword
+                "#B392F0": "#8AA4FF", // --accent
+                "#9ECBFF": "#9FD8A8", // --code-string
+                "#6A737D": "#A4A8B0", // --fg-muted
+                "#79B8FF": "#8AA4FF", // --accent
+                "#85E89D": "#7FD39A", // --git-added
+                "#FFAB70": "#E5C07B", // --git-modified
+                "#FDAEB7": "#F48771", // --danger
+                "#E1E4E8": "#E7E8EB", // --fg
+                "#DBEDFF": "#E7E8EB", // --fg
+                "#D1D5DA": "#A4A8B0", // --fg-muted
               } as Record<string, string>)[rule.settings.foreground?.toUpperCase() ?? ""] ?? rule.settings.foreground,
+              background: ({
+                "#86181D": "#F4877129", // --diff-del (--danger, 16%)
+                "#C24E00": "#E5C07B29", // --git-modified, 16%
+              } as Record<string, string>)[rule.settings.background?.toUpperCase() ?? ""] ?? rule.settings.background,
             },
           })),
         }],
@@ -93,7 +106,14 @@ export function loadMath(): Promise<void> {
     mathLoading = Promise.all([import("@vscode/markdown-it-katex"), import("katex/dist/katex.min.css")]).then(([m]) => {
       const mod = m as any;
       const plugin = typeof mod.default === "function" ? mod.default : mod.default?.default;
-      md.use(plugin, { throwOnError: false, enableMathBlockInHtml: true, enableMathInlineInHtml: true, enableFencedBlocks: true });
+      const styles = getComputedStyle(document.documentElement);
+      md.use(plugin, {
+        throwOnError: false,
+        errorColor: styles.getPropertyValue("--danger").trim(),
+        enableMathBlockInHtml: true,
+        enableMathInlineInHtml: true,
+        enableFencedBlocks: true,
+      });
       mathPlugin = true;
     });
   }
@@ -216,9 +236,64 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
   const code = pre.textContent ?? "";
   if (!mermaidLoaded) {
     mermaidLoaded = import("mermaid").then(({ default: mermaid }) => {
+      const styles = getComputedStyle(document.documentElement);
+      const cssValue = (name: string) => styles.getPropertyValue(name).trim();
+      const bg = cssValue("--bg");
+      const bgSide = cssValue("--bg-side");
+      const bgElev = cssValue("--bg-elev");
+      const bgHover = cssValue("--bg-hover");
+      const fg = cssValue("--fg");
+      const fgFaint = cssValue("--fg-faint");
+      const accent = cssValue("--accent");
+      const danger = cssValue("--danger");
       mermaid.initialize({
         startOnLoad: false,
-        theme: "dark",
+        theme: "base",
+        themeVariables: {
+          darkMode: true,
+          background: bg,
+          primaryColor: bgElev,
+          primaryTextColor: fg,
+          primaryBorderColor: fgFaint,
+          lineColor: fgFaint,
+          arrowheadColor: fgFaint,
+          secondaryColor: bgHover,
+          secondaryTextColor: fg,
+          tertiaryColor: bgSide,
+          tertiaryTextColor: fg,
+          noteBkgColor: bgSide,
+          noteTextColor: fg,
+          textColor: fg,
+          fontFamily: cssValue("--font-ui"),
+          // Gantt
+          sectionBkgColor: bgHover,
+          altSectionBkgColor: bgSide,
+          sectionBkgColor2: bgElev,
+          excludeBkgColor: bgSide,
+          taskBkgColor: bgElev,
+          activeTaskBkgColor: bgHover,
+          activeTaskBorderColor: accent,
+          doneTaskBkgColor: bgSide,
+          doneTaskBorderColor: fgFaint,
+          critBkgColor: bgHover,
+          critBorderColor: danger,
+          todayLineColor: danger,
+          vertLineColor: fgFaint,
+          taskTextColor: fg,
+          taskTextOutsideColor: fg,
+          taskTextLightColor: fg,
+          taskTextDarkColor: fg,
+          taskTextClickableColor: accent,
+          gridColor: fgFaint,
+          xyChart: {
+            backgroundColor: bg,
+            xAxisTickColor: fgFaint,
+            xAxisLineColor: fgFaint,
+            yAxisTickColor: fgFaint,
+            yAxisLineColor: fgFaint,
+            plotColorPalette: [accent, cssValue("--git-added"), cssValue("--git-modified"), danger, fgFaint].join(","),
+          },
+        },
         secure: [...(mermaid.mermaidAPI.defaultConfig.secure ?? []), "theme", "themeVariables", "themeCSS"],
       });
       return mermaid;

@@ -71,7 +71,8 @@ html, body, #root { margin: 0; height: 100%; overflow: hidden; }
 
 ::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--fg); }
 input::placeholder, textarea::placeholder { color: var(--fg-faint); opacity: 1; }
-button:focus-visible, .tab:focus-visible, input:not(.tree-input):focus-visible, textarea:focus-visible {
+button:focus-visible, .tab:focus-visible,
+input:not(.tree-input, .find-bar input, .cm-textfield):focus-visible, textarea:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
@@ -257,6 +258,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .mermaid-block { text-align: center; margin: 1em 0; overflow: auto; }
 .mermaid-block.mermaid-error pre.mermaid { text-align: left; color: var(--fg-muted); }
 .markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.markdown-body .katex-error { color: var(--danger); }
 
 /* コードブロックのコピーボタン */
 .code-block { position: relative; }
