@@ -57,11 +57,18 @@ export function usePersist(
   const persist = useCallback(() => {
     const saveTabState = (t: Tab): SavedTab => {
       const scroll = scrolls.current.get(t.id) ?? 0;
-      if (t.kind === "diff") return { kind: "diff", left: t.left, right: t.right, scroll };
+      if (t.kind === "diff") {
+        const left = t.reads?.left?.force;
+        const right = t.reads?.right?.force;
+        return { kind: "diff", left: t.left, right: t.right, scroll, force: left || right ? { left, right } : undefined };
+      }
       return {
         path: t.path,
         mode: t.mode,
         scroll,
+        encoding: t.encoding,
+        bom: t.bom,
+        force: t.force,
         ...(t.content !== t.saved ? { draft: t.content, draftBase: t.saved } : {}),
       };
     };

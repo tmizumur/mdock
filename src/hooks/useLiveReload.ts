@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type Entry, norm, readDirs, readText, readTree, statPaths, watchFiles } from "../lib/api";
+import { type Entry, type TextInfo, norm, readDirs, readTextResult, readTree, statPaths, watchFiles } from "../lib/api";
 import { type FsChange, FILES_CHANGED, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "../lib/liveReload";
-import { type DocTab, type Tab } from "../lib/tabs";
+import { type DocTab, type Tab, isDirty, receiveDiffText, receiveDocText } from "../lib/tabs";
 import { allTabs, filesOf, mapTabs } from "../lib/workspace";
 import { type useFolder } from "./useFolder";
 import { type useWorkspace } from "./useWorkspace";
@@ -33,68 +33,80 @@ export function useLiveReload(
         readGen.current.set(p, g);
         return g;
       });
-      const results = await Promise.all(targets.map((p) => readText(p).catch(() => null)));
-      const fresh = new Map<string, string>();
-      const missing: string[] = [];
-      targets.forEach((p, i) => {
-        if (readGen.current.get(p) !== gens[i]) return; // もっと新しい読み込みが走っている
-        const r = results[i];
-        if (r === null) missing.push(p);
-        else fresh.set(p, r);
-      });
-      // 読めなかったもの: 本当に消えたかを確かめる（権限などで読めないだけなら何もしない）
-      let gone: string[] = [];
-      if (missing.length) {
-        const st = await statPaths(missing).catch(() => null);
-        gone = st ? missing.filter((_, i) => !st[i]?.exists) : [];
+      const tabs = allTabs(wsRef.current);
+      const before = new Map(tabs.map((t) => [t.id, t]));
+      const forced = new Set<string>();
+      for (const tab of tabs) {
+        if (tab.kind === "doc" && tab.force) forced.add(tab.path);
+        if (tab.kind === "diff") {
+          if (tab.reads?.left?.force) forced.add(tab.left);
+          if (tab.reads?.right?.force) forced.add(tab.right);
+        }
       }
-      // 名前の変更・移動: 同じ変更の中に、消えたファイルと同じ内容のファイルがあれば移動先とみなす
-      const moved = new Map<string, string>();
+      const results = await Promise.all(targets.map((p) => readTextResult(p, forced.has(p))));
+      const indexes = new Map(targets.map((p, i) => [p, i]));
+      const resultFor = (path: string) => {
+        const i = indexes.get(path);
+        return i !== undefined && readGen.current.get(path) === gens[i] ? results[i] : undefined;
+      };
+      const gone = targets.filter((p) => resultFor(p)?.error?.code === "not_found");
+
+      // 同じ変更の中に同じ内容のファイルがあれば移動先とみなす。
+      const moved = new Map<string, { path: string; info: TextInfo }>();
       if (gone.length && !change.rescan) {
         const open = new Set(filesOf(wsRef.current).map(pathKey));
         const cands = change.paths.filter((c) => !open.has(pathKey(c))).slice(0, 20);
         for (const g of gone) {
-          const tab = allTabs(wsRef.current).find((t): t is DocTab => t.kind === "doc" && t.path === g);
+          const tab = tabs.find((t): t is DocTab => t.kind === "doc" && t.path === g && !t.readError);
           const anc = tab && matchedAncestor(change.paths, g);
           if (!tab || !anc) continue;
           const rest = norm(g).slice(norm(anc).length); // フォルダごと動いたときの、その中での位置
           for (const c of cands) {
             if (pathKey(c) === pathKey(anc)) continue;
             const to = norm(c) + rest;
-            if ([...moved.values()].includes(to)) continue;
-            const text = await readText(to).catch(() => null);
-            if (text !== null && text === tab.saved) {
-              moved.set(g, to);
+            if ([...moved.values()].some((entry) => entry.path === to)) continue;
+            const { info } = await readTextResult(to, tab.force);
+            if (info?.text === tab.saved) {
+              moved.set(g, { path: to, info });
               break;
             }
           }
         }
       }
-      if (!fresh.size && !gone.length) return;
-      const goneSet = new Set(gone);
       apply((w) =>
         mapTabs(w, (t): Tab => {
+          // 読み込み中に保存や手動の再読み込みが完了したタブは上書きしない。
+          const prior = before.get(t.id);
+          if (!prior) return t;
           if (t.kind === "diff") {
-            const l = fresh.get(t.left);
-            const r = fresh.get(t.right);
-            if ((l === undefined || l === t.leftText) && (r === undefined || r === t.rightText)) return t;
-            return { ...t, leftText: l ?? t.leftText, rightText: r ?? t.rightText };
+            if (prior.kind !== "diff") return t;
+            let next = t;
+            for (const side of ["left", "right"] as const) {
+              const path = t[side];
+              const key = side === "left" ? "leftText" : "rightText";
+              const result = resultFor(path);
+              const previous = t.reads?.[side];
+              const force = forced.has(path) || undefined;
+              if (!result || prior[side] !== path || prior[key] !== t[key] || prior.reads?.[side] !== previous) continue;
+              if (result.info || previous?.error || result.error.code === "large_file" || result.error.code === "too_large") {
+                next = receiveDiffText(next, side, result, result.info ? force : previous?.force);
+              }
+            }
+            return next;
           }
+          if (prior.kind !== "doc" || prior.path !== t.path || prior.saved !== t.saved ||
+              prior.readError !== t.readError || prior.encoding !== t.encoding || prior.bom !== t.bom) return t;
+          const result = resultFor(t.path);
+          const force = forced.has(t.path) || undefined;
+          if (!result) return t;
+          if (result.info) return receiveDocText(t, result.info, force);
           const to = moved.get(t.path);
-          if (to) return { ...t, path: to, deleted: false };
-          if (goneSet.has(t.path)) return t.deleted ? t : { ...t, deleted: true, external: undefined };
-          const text = fresh.get(t.path);
-          if (text === undefined) return t;
-          const settled = !t.deleted && t.external === undefined;
-          if (t.content === t.saved) {
-            // 未保存の変更なし: そのまま差し替える（同じ内容なら何もしない＝描き直さない）
-            if (text === t.saved && settled) return t;
-            return { ...t, content: text, saved: text, deleted: false, external: undefined };
+          if (to && !t.readError) return { ...receiveDocText(t, to.info, force), path: to.path };
+          if (result.error.code === "not_found" && !t.readError) {
+            return t.deleted ? t : { ...t, deleted: true, external: undefined };
           }
-          // 未保存の変更あり: 上書きしない
-          if (text === t.content) return { ...t, saved: text, deleted: false, external: undefined }; // 外と同じ内容になった（自分の保存など）
-          if (text === t.saved) return settled ? t : { ...t, deleted: false, external: undefined };
-          return t.external === text && !t.deleted ? t : { ...t, external: text, deleted: false };
+          if (isDirty(t) && !t.readError) return t;
+          return { ...t, deleted: false, external: undefined, readError: result.error };
         }),
       );
     },
@@ -132,7 +144,7 @@ export function useLiveReload(
             if (rootRef.current !== root) break;
             if (!sameEntries(treeRef.current, next)) setTree(next);
           } else if (plan.length) {
-            const res = await readDirs(plan).catch(() => null);
+            const res = await readDirs(plan, root).catch(() => null);
             if (rootRef.current !== root) break;
             if (!res) {
               q.all = true;

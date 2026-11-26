@@ -14,7 +14,7 @@ type Props = {
 const format = new Intl.NumberFormat("ja-JP");
 
 export default function StatusBar({ live, branch, modified, added, tab, fontSize }: Props) {
-  const content = tab?.kind === "doc" ? tab.content : undefined;
+  const content = tab?.kind === "doc" && !tab.readError ? tab.content : undefined;
   const count = useMemo(() => content === undefined ? null : Array.from(content.replace(/\s/g, "")).length, [content]);
   const path = tab?.kind === "doc" ? tab.path : tab && `${tab.left} ↔ ${tab.right}`;
 
@@ -31,7 +31,7 @@ export default function StatusBar({ live, branch, modified, added, tab, fontSize
       <span className="spacer" />
       {path && <span className="status-path" title={path}><bdi>{path}</bdi></span>}
       {count !== null && <span title="空白を除いた文字数。読了時間は毎分400文字での目安">{format.format(count)} 文字 · 約 {Math.ceil(count / 400)} 分</span>}
-      {tab?.kind === "doc" && <span>{isMarkdown(tab.path) ? "Markdown · UTF-8" : "UTF-8"}</span>}
+      {tab?.kind === "doc" && !tab.readError && <span>{isMarkdown(tab.path) ? "Markdown · " : ""}{tab.encoding ?? "UTF-8"}</span>}
       <span>{fontSize} px</span>
     </footer>
   );

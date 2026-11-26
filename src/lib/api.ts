@@ -7,15 +7,53 @@ export type Entry = {
   children: Entry[];
 };
 
+export type TextInfo = { text: string; encoding: string; bom: boolean };
+export type TextFormat = { encoding?: string; bom?: boolean };
+const fileErrorMessages = {
+  not_found: "ファイルが見つかりません。",
+  permission_denied: "ファイルへのアクセス権限がありません。",
+  is_directory: "フォルダです。",
+  not_regular_file: "通常のファイルではありません。",
+  large_file: "大きなファイルです。",
+  too_large: "ファイルが大きすぎます（上限は 100 MB です）。",
+  invalid_encoding: "文字コードを判定できません。",
+  unrepresentable: "指定した文字コードで保存できない文字があります。",
+  other: "ファイルの操作中にエラーが発生しました。",
+};
+export type FileError = { code: keyof typeof fileErrorMessages; message: string; size?: number };
+
+export function parseFileError(error: unknown): FileError {
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string" &&
+      Object.prototype.hasOwnProperty.call(fileErrorMessages, error.code)) {
+    const code = error.code as FileError["code"];
+    const message = "message" in error && typeof error.message === "string" && error.message
+      ? error.message : fileErrorMessages[code];
+    const size = "size" in error && typeof error.size === "number" && Number.isSafeInteger(error.size) && error.size >= 0
+      ? error.size : undefined;
+    return { code, message, size };
+  }
+  return { code: "other", message: fileErrorMessages.other };
+}
+
 export const readTree = (root: string) => invoke<Entry[]>("read_tree", { root });
-export const readText = (path: string) => invoke<string>("read_text", { path });
-export const writeText = (path: string, content: string) =>
-  invoke<void>("write_text", { path, content });
+export const readTextInfo = (path: string, force = false) => invoke<TextInfo>("read_text", { path, force });
+export const readText = async (path: string) => (await readTextInfo(path)).text;
+export const writeText = (path: string, content: string, format: TextFormat = {}) =>
+  invoke<void>("write_text", { path, content, ...format });
+
+export type TextReadResult = { info: TextInfo; error?: undefined } | { info?: undefined; error: FileError };
+export async function readTextResult(path: string, force = false): Promise<TextReadResult> {
+  try {
+    return { info: await readTextInfo(path, force) };
+  } catch (error) {
+    return { error: parseFileError(error) };
+  }
+}
 export const watchFolder = (root: string) => invoke<void>("watch_folder", { root });
 /** 開いているファイルの一覧（フォルダの外のファイルも監視するため） */
 export const watchFiles = (paths: string[]) => invoke<void>("watch_files", { paths });
 /** 変更のあったフォルダだけ読み直す（フォルダごとの中身。消えていれば null） */
-export const readDirs = (dirs: string[]) => invoke<(Entry[] | null)[]>("read_dirs", { dirs });
+export const readDirs = (dirs: string[], root: string) => invoke<(Entry[] | null)[]>("read_dirs", { dirs, root });
 
 export type Stat = { exists: boolean; is_dir: boolean; is_executable?: boolean; mtime: number; size: number };
 export const statPaths = (paths: string[]) => invoke<Stat[]>("stat_paths", { paths });

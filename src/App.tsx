@@ -19,7 +19,7 @@ import { useFinderOpen, useWindowDrop, useWindowTitle } from "./hooks/useWindowE
 import { useWorkspace, useWorkspaceDrop } from "./hooks/useWorkspace";
 import { useDragPos, useDrag } from "./lib/dnd";
 import { type LayoutNode } from "./lib/layout";
-import { type ViewMode, activeTab, emptyPane } from "./lib/tabs";
+import { type ViewMode, activeTab, emptyPane, textFormat } from "./lib/tabs";
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -33,7 +33,7 @@ export default function App() {
   const workspace = useWorkspace(ask, setError);
   const {
     ws, wsRef, activeIdx, activeRef, order, scrolls, focusPane, updatePane, updateActiveTab,
-    openFile, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
+    openFile, retryRead, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
   } = workspace;
   const folder = useFolder(workspace, setError);
   const { root, tree, watchedRoot, pickFolder, openFolder, refreshTree } = folder;
@@ -76,6 +76,7 @@ export default function App() {
       onTabMenu={(k, x, y) => openTabMenu(i, k, x, y)}
       onChange={(content) => updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, content } : t))}
       onMode={(mode: ViewMode) => updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, mode } : t))}
+      onRetryRead={retryRead}
       onSave={() => {
         const p = wsRef.current.panes[i];
         const t = p && activeTab(p);
@@ -83,10 +84,10 @@ export default function App() {
       }}
       onReloadExternal={() =>
         updateActiveTab(i, (t) =>
-          t.kind === "doc" && t.external !== undefined ? { ...t, content: t.external, saved: t.external, external: undefined } : t,
+          t.kind === "doc" && t.external ? { ...t, ...textFormat(t.external), content: t.external.text, saved: t.external.text, external: undefined } : t,
         )
       }
-      onKeepMine={() => updateActiveTab(i, (t) => (t.kind === "doc" && t.external !== undefined ? { ...t, saved: t.external, external: undefined } : t))}
+      onKeepMine={() => updateActiveTab(i, (t) => (t.kind === "doc" && t.external ? { ...t, ...textFormat(t.external), saved: t.external.text, external: undefined } : t))}
       onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab })}
       onPrint={() => printPane(i)}
       printTarget={activeIdx === i}
@@ -94,7 +95,7 @@ export default function App() {
   );
 
   const currentTab = ws.panes[activeIdx] ? activeTab(ws.panes[activeIdx]) : undefined;
-  const activeOutline = currentTab?.kind === "doc" && outline?.paneId === activeIdx &&
+  const activeOutline = currentTab?.kind === "doc" && !currentTab.readError && outline?.paneId === activeIdx &&
     outline.tabId === currentTab.id && outline.mode === currentTab.mode ? outline.outline : undefined;
 
   const visiblePaths = order
