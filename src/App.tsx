@@ -18,7 +18,7 @@ import { Entry, cancelQuit, dirname, loadSession, norm, openNewWindow, printWind
 import { type FsChange, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "./lib/liveReload";
 import { renderAllPending } from "./lib/markdown";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader, useDragPos, useDrag } from "./lib/dnd";
-import { type LayoutNode, type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, presetLayout, removeLeaf, setSizes, splitLeaf } from "./lib/layout";
+import { type LayoutNode, type PresetLayout, type Side, PRESET_COUNT, flipOuter, leaves, newNodeId, presetLayout, removeLeaf, setSizes, splitLeaf } from "./lib/layout";
 import {
   type DiffTab,
   type DocTab,
@@ -500,6 +500,17 @@ export default function App() {
       return { layout: presetLayout(kind, keep), panes };
     });
     if (focus) focusPane(focus);
+  };
+
+  const toggleSplit = (dir: "row" | "col") => {
+    const { layout } = wsRef.current;
+    if (layout.type === "pane") {
+      resetLayout(dir === "row" ? "cols2" : "rows2");
+    } else if (layout.dir === dir) {
+      resetLayout("single");
+    } else {
+      apply((w) => ({ ...w, layout: flipOuter(w.layout, dir) }));
+    }
   };
 
   // 起動時: 前回のフォルダ・タブ・表示モード・スクロール位置・未保存の編集を復元
@@ -1004,7 +1015,11 @@ export default function App() {
       } else if (k === "e") {
         e.preventDefault();
         if (activeTab(wsRef.current.panes[i] ?? emptyPane())?.kind === "doc") toggleMode(i);
-      } else if (k === "\\" && !e.shiftKey) {
+      } else if (e.altKey && !e.shiftKey && (e.code === "Backslash" || e.code === "IntlYen" || k === "\\")) {
+        // ⌘⌥\: 上下に分割／1画面に戻す
+        e.preventDefault();
+        toggleSplit("col");
+      } else if (k === "\\" && !e.shiftKey && !e.altKey) {
         // ⌘\: 今のペインを右に分割（今のタブを複製して開く）
         e.preventDefault();
         splitTab(i, "right");
@@ -1128,6 +1143,7 @@ export default function App() {
         onPickFolder={pickFolder}
         onOpenFolder={(dir) => openFolder(dir, true)}
         onLayout={resetLayout}
+        onToggleSplit={toggleSplit}
         onSettings={() => setSettingsOpen(true)}
         beforeRestart={flush}
       />

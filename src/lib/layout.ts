@@ -59,6 +59,11 @@ function tidy(n: LayoutNode): LayoutNode {
   return { ...n, children, sizes: fit(sizes) };
 }
 
+/** 一番外側の分割の向きを変え、同じ向きになった子の分割をまとめる */
+export function flipOuter(root: LayoutNode, dir: "row" | "col"): LayoutNode {
+  return root.type === "split" ? tidy({ ...root, dir }) : root;
+}
+
 /** target のペインの side 側に、新しいペイン newId を作る（target は半分の大きさになる） */
 export function splitLeaf(root: LayoutNode, target: string, side: Side, newId: string): LayoutNode {
   const dir = side === "left" || side === "right" ? "row" : "col";

@@ -124,7 +124,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .segmented button.on { color: var(--fg); font-weight: 600; }
 .segmented.icons button { display: inline-flex; align-items: center; padding: 4px 8px; }
 .layout-segment { flex-shrink: 0; }
-.layout-segment button.on { color: var(--accent); }
+.layout-segment button.on svg { color: var(--accent); }
 
 /* レイアウト */
 .main { flex: 1; min-height: 0; }
