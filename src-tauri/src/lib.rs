@@ -22,6 +22,8 @@ struct Entry {
     path: String,
     is_dir: bool,
     children: Vec<Entry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loaded: Option<bool>,
 }
 
 /// ツリーから除外するフォルダ（依存関係、ビルド成果物、Git の管理データなど）
@@ -44,11 +46,18 @@ const SKIP_FILES: &[&str] = &[".DS_Store"];
 
 /// 除外対象を飛ばし、隠しファイル・フォルダを含めてツリーを読み込む。
 fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
-    walk_dir(dir, depth, &mut Vec::new())
+    walk_dir(dir, depth, &mut Vec::new(), None)
 }
 
-fn walk_dir(dir: &Path, depth: usize, ancestors: &mut Vec<PathBuf>) -> Vec<Entry> {
-    if depth > 12 {
+const TREE_DEPTH: usize = 13;
+
+fn walk_dir(
+    dir: &Path,
+    depth: usize,
+    ancestors: &mut Vec<PathBuf>,
+    max_depth: Option<usize>,
+) -> Vec<Entry> {
+    if depth >= TREE_DEPTH || max_depth.is_some_and(|limit| depth >= limit) {
         return vec![];
     }
     let Ok(real) = dir.canonicalize() else {
@@ -73,8 +82,11 @@ fn walk_dir(dir: &Path, depth: usize, ancestors: &mut Vec<PathBuf>) -> Vec<Entry
             if is_dir && SKIP_DIRS.contains(&name.as_str()) {
                 return None;
             }
-            let children = if is_dir {
-                walk_dir(&path, depth + 1, ancestors)
+            let deferred = is_dir
+                && depth + 1 < TREE_DEPTH
+                && max_depth.is_some_and(|limit| depth + 1 >= limit);
+            let children = if is_dir && !deferred {
+                walk_dir(&path, depth + 1, ancestors, max_depth)
             } else {
                 vec![]
             };
@@ -83,6 +95,7 @@ fn walk_dir(dir: &Path, depth: usize, ancestors: &mut Vec<PathBuf>) -> Vec<Entry
                 path: path.to_string_lossy().to_string(),
                 is_dir,
                 children,
+                loaded: deferred.then_some(false),
             })
         })
         .collect();
@@ -99,13 +112,16 @@ fn walk_dir(dir: &Path, depth: usize, ancestors: &mut Vec<PathBuf>) -> Vec<Entry
 // 読み込みは画面（メインスレッド）を止めないよう、別スレッドで行う
 
 #[tauri::command]
-async fn read_tree(root: String) -> Result<Vec<Entry>, String> {
+async fn read_tree(root: String, max_depth: Option<usize>) -> Result<Vec<Entry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = PathBuf::from(root);
         if !root.is_dir() {
             return Err("フォルダが見つかりません".into());
         }
-        Ok(walk(&root, 0))
+        Ok(match max_depth {
+            Some(limit) => walk_dir(&root, 0, &mut Vec::new(), Some(limit)),
+            None => walk(&root, 0),
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -134,6 +150,7 @@ fn read_subtree(dir: &Path, root: &Path) -> Option<Vec<Entry>> {
         .skip(1)
         .take_while(|p| p.starts_with(root))
         .collect();
+    let depth = parents.len();
     for parent in parents.into_iter().rev() {
         let real = parent.canonicalize().ok()?;
         if ancestors.contains(&real) {
@@ -141,13 +158,35 @@ fn read_subtree(dir: &Path, root: &Path) -> Option<Vec<Entry>> {
         }
         ancestors.push(real);
     }
-    Some(walk_dir(dir, 0, &mut ancestors))
+    Some(walk_dir(dir, depth, &mut ancestors, None))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{fs, walk};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn walk_marks_unread_folders_at_max_depth() {
+        let root = super::text_file::tests::TempDir::new();
+        fs::create_dir_all(root.0.join("a/b")).unwrap();
+        fs::write(root.0.join("a/note.md"), "").unwrap();
+        fs::write(root.0.join("a/b/deep.md"), "").unwrap();
+
+        let shallow = super::walk_dir(&root.0, 0, &mut Vec::new(), Some(2));
+        let entries = &shallow[0].children;
+        assert_eq!(shallow[0].loaded, None);
+        assert_eq!(entries[0].name, "b");
+        assert_eq!(entries[0].loaded, Some(false));
+        assert!(entries[0].children.is_empty());
+        assert_eq!(entries[1].name, "note.md");
+        assert_eq!(entries[1].loaded, None);
+        assert_eq!(serde_json::to_value(&entries[0]).unwrap()["loaded"], false);
+
+        let full = walk(&root.0, 0);
+        assert_eq!(full[0].children[0].loaded, None);
+        assert_eq!(full[0].children[0].children[0].name, "deep.md");
+    }
 
     #[test]
     fn walk_includes_hidden_entries_and_skips_exclusions() {

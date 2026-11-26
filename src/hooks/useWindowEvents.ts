@@ -58,15 +58,18 @@ function useWindowDrop(
 ) {
   // フォルダ・ファイルのドラッグ&ドロップ
   useEffect(() => {
+    let active = true;
     const un = getCurrentWebview().onDragDropEvent(async (ev) => {
-      if (ev.payload.type !== "drop" || !ev.payload.paths.length) return;
+      if (!active || ev.payload.type !== "drop" || !ev.payload.paths.length) return;
       const paths = ev.payload.paths;
       const dirs = await directoryPaths(paths);
+      if (!active) return;
       const dir = paths.find((p) => dirs.has(p));
       if (dir) await openFolder(dir, true);
-      await openFiles(paths.filter((p) => !dirs.has(p)), false);
+      if (active) await openFiles(paths.filter((p) => !dirs.has(p)), false);
     });
     return () => {
+      active = false;
       un.then((f) => f());
     };
   }, [openFolder, openFiles]);

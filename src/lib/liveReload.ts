@@ -93,7 +93,8 @@ export function dirsToReread(
     for (let d = parentOf(norm(p)); ; d = parentOf(d)) {
       const dk = pathKey(d);
       if (dk.length <= rootKey.length) return rootPath;
-      if (index.get(dk)?.is_dir) return d;
+      const entry = index.get(dk);
+      if (entry?.is_dir) return entry.path;
     }
   };
   for (const c of changed) {
@@ -102,12 +103,13 @@ export function dirsToReread(
     const e = index.get(k);
     const st = stats.get(k);
     if (e && st?.exists && e.is_dir === st.is_dir) {
-      if (!e.is_dir) continue; // 中身の変更だけ
+      if (!e.is_dir || e.loaded === false) continue;
       dirs.set(k, e.path);
       continue;
     }
     const d = nearestDir(c);
     if (pathKey(d) === rootKey) return "all";
+    if (index.get(pathKey(d))?.loaded === false) continue;
     dirs.set(pathKey(d), d);
   }
   // 上のフォルダを読み直すなら、その中は読み直さなくてよい
@@ -126,6 +128,7 @@ export function sameEntries(a: Entry[], b: Entry[]): boolean {
     const x = a[i];
     const y = b[i];
     if (x.path !== y.path || x.name !== y.name || x.is_dir !== y.is_dir) return false;
+    if ((x.loaded === false) !== (y.loaded === false)) return false;
     if (x.is_dir && !sameEntries(x.children, y.children)) return false;
   }
   return true;
@@ -135,7 +138,7 @@ export function sameEntries(a: Entry[], b: Entry[]): boolean {
  * dir の中身を children に差し替えたツリー（変わらない部分は同じオブジェクトのまま）。
  * dir がツリーに見つからなければ null。
  */
-export function spliceTree(tree: Entry[], dir: string, children: Entry[]): Entry[] | null {
+export function spliceTree(tree: Entry[], dir: string, children: Entry[], onlyUnloaded = false): Entry[] | null {
   const target = pathKey(dir);
   let found = false;
   const visit = (es: Entry[]): Entry[] => {
@@ -145,9 +148,9 @@ export function spliceTree(tree: Entry[], dir: string, children: Entry[]): Entry
       const k = pathKey(e.path);
       if (k === target) {
         found = true;
-        if (sameEntries(e.children, children)) return e;
+        if (e.loaded !== false && (onlyUnloaded || sameEntries(e.children, children))) return e;
         changed = true;
-        return { ...e, children };
+        return { ...e, children, loaded: true };
       }
       if (target.startsWith(k + "/")) {
         const next = visit(e.children);

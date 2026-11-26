@@ -5,6 +5,7 @@ export type Entry = {
   path: string;
   is_dir: boolean;
   children: Entry[];
+  loaded?: boolean;
 };
 
 export type TextInfo = { text: string; encoding: string; bom: boolean };
@@ -35,7 +36,7 @@ export function parseFileError(error: unknown): FileError {
   return { code: "other", message: fileErrorMessages.other };
 }
 
-export const readTree = (root: string) => invoke<Entry[]>("read_tree", { root });
+export const readTree = (root: string, maxDepth?: number) => invoke<Entry[]>("read_tree", { root, maxDepth });
 export const readTextInfo = (path: string, force = false) => invoke<TextInfo>("read_text", { path, force });
 export const readText = async (path: string) => (await readTextInfo(path)).text;
 export const writeText = (path: string, content: string, format: TextFormat = {}) =>

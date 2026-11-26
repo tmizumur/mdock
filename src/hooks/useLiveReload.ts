@@ -10,7 +10,7 @@ import { type useWorkspace } from "./useWorkspace";
 
 export function useLiveReload(
   ready: boolean,
-  { root, rootRef, treeRef, setTree }: Pick<ReturnType<typeof useFolder>, "root" | "rootRef" | "treeRef" | "setTree">,
+  { root, rootRef, treeRef, setTree, folderLoadRef }: Pick<ReturnType<typeof useFolder>, "root" | "rootRef" | "treeRef" | "setTree" | "folderLoadRef">,
   { ws, wsRef, apply }: Pick<ReturnType<typeof useWorkspace>, "ws" | "wsRef" | "apply">,
 ) {
   const [watchedFiles, setWatchedFiles] = useState("");
@@ -127,21 +127,26 @@ export function useLiveReload(
   );
 
   /** ツリーの部分更新の順番待ち（読み直している間に届いた変更は、終わってからまとめて読む） */
-  const treeQueue = useRef({ paths: new Set<string>(), all: false, running: false });
+  const treeQueue = useRef<{ load: typeof folderLoadRef.current; paths: Set<string>; all: boolean; running: boolean } | null>(null);
   /** ツリーを読み直す。変更のあったフォルダだけ読み、全体は必要なときだけ。展開状態・選択・スクロール位置は保たれる */
   const refreshTreeFor = useCallback(
     async (change: FsChange) => {
-      const q = treeQueue.current;
-      const r0 = rootRef.current;
-      if (!r0) return;
+      const load = folderLoadRef.current;
+      const root = rootRef.current;
+      if (!root || !load) return;
+      let q = treeQueue.current;
+      if (q?.load !== load) {
+        q = { load, paths: new Set<string>(), all: false, running: false };
+        treeQueue.current = q;
+      }
       if (change.rescan) q.all = true;
-      else for (const p of change.paths) if (!irrelevantForTree(r0, p)) q.paths.add(p);
-      if (q.running) return;
+      else for (const p of change.paths) if (!irrelevantForTree(root, p)) q.paths.add(p);
+      if (q.running || (!q.all && !q.paths.size)) return;
       q.running = true;
       try {
-        while (q.all || q.paths.size) {
-          const root = rootRef.current;
-          if (!root) break;
+        // 全体を反映してから、その読み込み中に届いた変更を処理する
+        if (load.pending) await load.pending;
+        while (folderLoadRef.current === load && (q.all || q.paths.size)) {
           const all = q.all;
           const paths = [...q.paths];
           q.all = false;
@@ -151,14 +156,14 @@ export function useLiveReload(
             const st = await statPaths(paths).catch(() => null);
             if (st) plan = dirsToReread(root, indexTree(treeRef.current), paths, new Map(paths.map((p, i) => [pathKey(p), st[i]])));
           }
-          if (rootRef.current !== root) break;
+          if (folderLoadRef.current !== load) break;
           if (plan === "all") {
             const next = await readTree(root).catch(() => [] as Entry[]); // フォルダが消えたら空にする（戻れば読み直す）
-            if (rootRef.current !== root) break;
+            if (folderLoadRef.current !== load) break;
             if (!sameEntries(treeRef.current, next)) setTree(next);
           } else if (plan.length) {
             const res = await readDirs(plan, root).catch(() => null);
-            if (rootRef.current !== root) break;
+            if (folderLoadRef.current !== load) break;
             if (!res) {
               q.all = true;
               continue;
@@ -177,7 +182,7 @@ export function useLiveReload(
         q.running = false;
       }
     },
-    [rootRef, setTree, treeRef],
+    [folderLoadRef, rootRef, setTree, treeRef],
   );
 
   // 監視からの知らせ（変更から 100ms ほどで届く）
@@ -210,7 +215,9 @@ export function useLiveReload(
   const lastTreeCheck = useRef(0);
   useEffect(() => {
     if (!ready) return;
-    const recheck = async () => {
+    const recheck = async (checkTree = true) => {
+      const load = folderLoadRef.current;
+      const checkCurrentTree = checkTree && load && !load.pending;
       const paths = filesOf(wsRef.current);
       if (paths.length) {
         const st = await statPaths(paths).catch(() => null);
@@ -226,12 +233,12 @@ export function useLiveReload(
         }
       }
       const now = Date.now();
-      if (now - lastTreeCheck.current > 2000) {
+      if (checkCurrentTree && folderLoadRef.current === load && now - lastTreeCheck.current > 2000) {
         lastTreeCheck.current = now;
         refreshTreeFor({ paths: [], rescan: true });
       }
     };
-    recheck(); // 今の状態を覚えておく
+    recheck(false); // 起動時のツリーはセッションの復元で読み込む
     const un = getCurrentWindow().onFocusChanged(({ payload }) => payload && recheck());
     const onVis = () => document.visibilityState === "visible" && recheck();
     document.addEventListener("visibilitychange", onVis);
@@ -239,7 +246,8 @@ export function useLiveReload(
       un.then((f) => f());
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [ready, reloadTabs, refreshTreeFor, wsRef]);
+  }, [ready, folderLoadRef, reloadTabs, refreshTreeFor, wsRef]);
 
-  return { watchKey, watchedFiles };
+  const refreshTree = () => refreshTreeFor({ paths: [], rescan: true });
+  return { watchKey, watchedFiles, refreshTree };
 }

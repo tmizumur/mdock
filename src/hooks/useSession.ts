@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 import { type useUnsavedDialog } from "../components/Dialogs";
-import { cancelQuit, readTree, saveSession } from "../lib/api";
+import { cancelQuit, saveSession } from "../lib/api";
 import { leaves } from "../lib/layout";
 import { restorePane, restoreSession } from "../lib/session";
 import { type PaneState, type SavedTab, type Session, type Tab, emptyPane, isDirty, tabTitle } from "../lib/tabs";
@@ -11,7 +11,7 @@ import { type useFolder } from "./useFolder";
 import { type useWorkspace } from "./useWorkspace";
 
 export function useRestoreSession(
-  { setTree, setRoot, startWatchingFolder }: Pick<ReturnType<typeof useFolder>, "setTree" | "setRoot" | "startWatchingFolder">,
+  { openFolder }: Pick<ReturnType<typeof useFolder>, "openFolder">,
   { scrolls, apply, focusPane }: Pick<ReturnType<typeof useWorkspace>, "scrolls" | "apply" | "focusPane">,
 ) {
   const [ready, setReady] = useState(false);
@@ -20,27 +20,25 @@ export function useRestoreSession(
 
   // 起動時: 前回のフォルダ・タブ・表示モード・スクロール位置・未保存の編集を復元
   useEffect(() => {
+    let active = true;
     (async () => {
       const s = await restoreSession();
+      if (!active) return;
       sidebarLayout.current = s.sidebar;
-      if (s.root) {
-        try {
-          setTree(await readTree(s.root));
-          setRoot(s.root);
-          startWatchingFolder(s.root).catch(() => {});
-        } catch {
-          /* フォルダが消えていた場合は何も開かない */
-        }
-      }
       const ids = leaves(s.layout);
-      const restored = await Promise.all(ids.map((id) => restorePane(s.panes[id], scrolls.current)));
+      const [, restored] = await Promise.all([
+        s.root && openFolder(s.root, false, true),
+        Promise.all(ids.map((id) => restorePane(s.panes[id], scrolls.current))),
+      ]);
+      if (!active) return;
       const panes: Record<string, PaneState> = {};
       ids.forEach((id, i) => (panes[id] = restored[i]));
       apply(() => ({ layout: s.layout, panes }));
       focusPane(ids.includes(s.activePane) ? s.activePane : ids[0]);
       setReady(true);
     })();
-  }, [apply, focusPane, scrolls, setRoot, setTree, startWatchingFolder]);
+    return () => { active = false; };
+  }, [apply, focusPane, openFolder, scrolls]);
 
   return { ready, sidebarLayout };
 }

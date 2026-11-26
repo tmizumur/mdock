@@ -36,7 +36,7 @@ export default function App() {
     openFile, retryRead, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
   } = workspace;
   const folder = useFolder(workspace, setError);
-  const { root, tree, watchedRoot, pickFolder, openFolder, refreshTree } = folder;
+  const { root, tree, watchedRoot, pickFolder, openFolder, loadDirectory } = folder;
 
   // リスナーはこの順に登録する
   const git = useGitStatus(root, settings.gitStatus, settings.statusBar);
@@ -45,7 +45,7 @@ export default function App() {
   const { ready, sidebarLayout } = session;
   const { schedulePersist, flush } = usePersist(session, folder, workspace, ask);
   useWindowTitle(root);
-  const { watchKey, watchedFiles } = useLiveReload(ready, folder, workspace);
+  const { watchKey, watchedFiles, refreshTree } = useLiveReload(ready, folder, workspace);
   const pickFiles = useFileOpen(ready, folder, workspace, setError);
 
   const paneActions = usePaneActions(workspace);
@@ -166,6 +166,7 @@ export default function App() {
                   entries={tree}
                   openPaths={visiblePaths}
                   onOpen={onTreeOpen}
+                  onLoadDirectory={loadDirectory}
                   onChanged={refreshTree}
                   onRenamed={onRenamed}
                   onError={setError}
