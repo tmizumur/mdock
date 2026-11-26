@@ -43,7 +43,13 @@ fn mark_of(x: u8, y: u8) -> Option<Mark> {
         (b'?', b'?') => Some(Mark::U),
         (b'!', b'!') => Some(Mark::I),
         // 競合（unmerged）
-        (b'D', b'D') | (b'A', b'U') | (b'U', b'D') | (b'U', b'A') | (b'D', b'U') | (b'A', b'A') | (b'U', b'U') => Some(Mark::C),
+        (b'D', b'D')
+        | (b'A', b'U')
+        | (b'U', b'D')
+        | (b'U', b'A')
+        | (b'D', b'U')
+        | (b'A', b'A')
+        | (b'U', b'U') => Some(Mark::C),
         (b'D', _) | (_, b'D') => None,
         (b'A', _) | (b'R', _) | (b'C', _) | (_, b'A') => Some(Mark::A),
         _ if matches!(x, b'M' | b'T') || matches!(y, b'M' | b'T' | b'R' | b'C') => Some(Mark::M),
@@ -70,7 +76,10 @@ pub fn parse_porcelain(out: &[u8]) -> Vec<Item> {
     porcelain_records(out)
         .filter_map(|(x, y, path)| {
             let mark = mark_of(x, y)?;
-            Some(Item { path: String::from_utf8_lossy(path).into_owned(), mark })
+            Some(Item {
+                path: String::from_utf8_lossy(path).into_owned(),
+                mark,
+            })
         })
         .collect()
 }
@@ -80,7 +89,11 @@ pub fn parse_porcelain(out: &[u8]) -> Vec<Item> {
 pub fn to_abs(root: &str, rel: &str, item: &Item) -> Option<GitEntry> {
     let dir = item.path.ends_with('/');
     let sub = path_in_root(rel, &item.path)?;
-    Some(GitEntry { path: format!("{}/{}", root.trim_end_matches('/'), sub), mark: item.mark, dir })
+    Some(GitEntry {
+        path: format!("{}/{}", root.trim_end_matches('/'), sub),
+        mark: item.mark,
+        dir,
+    })
 }
 
 fn path_in_root<'a>(rel: &str, path: &'a str) -> Option<&'a str> {
@@ -105,7 +118,10 @@ fn git_bin() -> Option<&'static PathBuf> {
         }
         #[cfg(target_os = "macos")]
         {
-            let dev = Command::new("/usr/bin/xcode-select").arg("-p").output().ok()?;
+            let dev = Command::new("/usr/bin/xcode-select")
+                .arg("-p")
+                .output()
+                .ok()?;
             if !dev.status.success() {
                 return None;
             }
@@ -118,7 +134,12 @@ fn git_bin() -> Option<&'static PathBuf> {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Command::new("git").arg("--version").output().ok().filter(|o| o.status.success()).map(|_| PathBuf::from("git"))
+            Command::new("git")
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|_| PathBuf::from("git"))
         }
     })
     .as_ref()
@@ -137,7 +158,9 @@ fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
 
 /// root を含むリポジトリの .git フォルダ（root より上にあるときの監視用）。git を実行せずに探す。
 pub fn find_git_dir(root: &Path) -> Option<PathBuf> {
-    root.ancestors().map(|d| d.join(".git")).find(|g| g.is_dir())
+    root.ancestors()
+        .map(|d| d.join(".git"))
+        .find(|g| g.is_dir())
 }
 
 /// 現在のブランチ。detached HEAD ではコミットの短いハッシュを返す。
@@ -149,22 +172,37 @@ pub fn branch(root: &str) -> Option<String> {
 }
 
 /// root の Git の状態と、ステータスバー用の削除件数。
-pub fn status(root: &str, include_ignored: bool, count_files: bool) -> Option<(Vec<GitEntry>, usize)> {
+pub fn status(
+    root: &str,
+    include_ignored: bool,
+    count_files: bool,
+) -> Option<(Vec<GitEntry>, usize)> {
     let dir = Path::new(root);
     let top = git(dir, &["rev-parse", "--show-toplevel"])?;
     let top = PathBuf::from(String::from_utf8_lossy(&top).trim());
     let real_root = std::fs::canonicalize(dir).ok()?;
     let real_top = std::fs::canonicalize(&top).unwrap_or(top);
-    let rel = real_root.strip_prefix(&real_top).ok()?.to_string_lossy().replace('\\', "/");
+    let rel = real_root
+        .strip_prefix(&real_top)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
     // 件数を表示するときは、未追跡フォルダの中もファイル単位で数える。
     let mut args = vec!["status", "--porcelain=v1", "-z"];
     if include_ignored {
         args.push("--ignored=matching");
     }
-    args.push(if count_files { "--untracked-files=all" } else { "--untracked-files=normal" });
+    args.push(if count_files {
+        "--untracked-files=all"
+    } else {
+        "--untracked-files=normal"
+    });
     args.push(".");
     let out = git(dir, &args)?;
-    let entries = parse_porcelain(&out).iter().filter_map(|i| to_abs(root, &rel, i)).collect();
+    let entries = parse_porcelain(&out)
+        .iter()
+        .filter_map(|i| to_abs(root, &rel, i))
+        .collect();
     let deleted = if count_files {
         porcelain_records(&out)
             .filter(|&(x, y, path)| {
@@ -184,7 +222,10 @@ mod tests {
     use super::*;
 
     fn item(path: &str, mark: Mark) -> Item {
-        Item { path: path.into(), mark }
+        Item {
+            path: path.into(),
+            mark,
+        }
     }
 
     #[test]
@@ -209,7 +250,10 @@ mod tests {
     #[test]
     fn skips_deleted_and_rename_source() {
         let out = b" D gone.md\0D  gone2.md\0R  new name.md\0old name.md\0 M after.md\0";
-        assert_eq!(parse_porcelain(out), vec![item("new name.md", Mark::A), item("after.md", Mark::M)]);
+        assert_eq!(
+            parse_porcelain(out),
+            vec![item("new name.md", Mark::A), item("after.md", Mark::M)]
+        );
     }
 
     #[test]
@@ -217,14 +261,21 @@ mod tests {
         let out = b"UU both.md\0AA added.md\0DU x.md\0";
         assert_eq!(
             parse_porcelain(out),
-            vec![item("both.md", Mark::C), item("added.md", Mark::C), item("x.md", Mark::C)]
+            vec![
+                item("both.md", Mark::C),
+                item("added.md", Mark::C),
+                item("x.md", Mark::C)
+            ]
         );
     }
 
     #[test]
     fn handles_non_ascii_and_empty() {
         assert_eq!(parse_porcelain(b""), vec![]);
-        assert_eq!(parse_porcelain(" M 日本語/メモ.md\0".as_bytes()), vec![item("日本語/メモ.md", Mark::M)]);
+        assert_eq!(
+            parse_porcelain(" M 日本語/メモ.md\0".as_bytes()),
+            vec![item("日本語/メモ.md", Mark::M)]
+        );
     }
 
     #[test]
@@ -270,8 +321,10 @@ mod tests {
         let root = sub.to_string_lossy().to_string();
         let (entries, deleted) = status(&root, true, false).unwrap();
         assert_eq!(deleted, 0);
-        let mut got: Vec<(String, Mark, bool)> =
-            entries.into_iter().map(|e| (e.path[root.len() + 1..].to_string(), e.mark, e.dir)).collect();
+        let mut got: Vec<(String, Mark, bool)> = entries
+            .into_iter()
+            .map(|e| (e.path[root.len() + 1..].to_string(), e.mark, e.dir))
+            .collect();
         got.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             got,

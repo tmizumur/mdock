@@ -5,8 +5,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WebviewWindowBuilder};
 
 /// フォルダツリーの1要素
@@ -20,7 +20,18 @@ struct Entry {
 
 /// ツリーから除外するフォルダ（依存関係、ビルド成果物、Git の管理データなど）
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", "target", "dist", "build", ".git", ".venv", "__pycache__", ".next", ".cache", ".turbo", ".svn", ".hg",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".git",
+    ".venv",
+    "__pycache__",
+    ".next",
+    ".cache",
+    ".turbo",
+    ".svn",
+    ".hg",
 ];
 /// ツリーから除外するファイル
 const SKIP_FILES: &[&str] = &[".DS_Store"];
@@ -30,7 +41,9 @@ fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
     if depth > 12 {
         return vec![];
     }
-    let Ok(read) = fs::read_dir(dir) else { return vec![] };
+    let Ok(read) = fs::read_dir(dir) else {
+        return vec![];
+    };
     let mut entries: Vec<Entry> = read
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -43,12 +56,25 @@ fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
             if is_dir && SKIP_DIRS.contains(&name.as_str()) {
                 return None;
             }
-            let children = if is_dir { walk(&path, depth + 1) } else { vec![] };
-            Some(Entry { name, path: path.to_string_lossy().to_string(), is_dir, children })
+            let children = if is_dir {
+                walk(&path, depth + 1)
+            } else {
+                vec![]
+            };
+            Some(Entry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                is_dir,
+                children,
+            })
         })
         .collect();
     // フォルダが先、その後に名前順
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     entries
 }
 
@@ -90,13 +116,25 @@ mod tests {
 
     #[test]
     fn walk_includes_hidden_entries_and_skips_exclusions() {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("mdock-tree-{}-{timestamp}", std::process::id()));
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("mdock-tree-{}-{timestamp}", std::process::id()));
         fs::create_dir(&root).unwrap();
         for dir in [".github", ".git", "node_modules/x"] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
-        for file in [".env", ".github/workflow.yml", "a.md", "b.txt", ".git/config", "node_modules/x/index.js", ".DS_Store"] {
+        for file in [
+            ".env",
+            ".github/workflow.yml",
+            "a.md",
+            "b.txt",
+            ".git/config",
+            "node_modules/x/index.js",
+            ".DS_Store",
+        ] {
             fs::write(root.join(file), "").unwrap();
         }
 
@@ -114,9 +152,11 @@ mod tests {
 
 #[tauri::command]
 async fn read_text(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || fs::read_to_string(&path).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        fs::read_to_string(&path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// ファイルの状態（外部での変更の確認に使う）
@@ -146,7 +186,12 @@ async fn stat_paths(paths: Vec<String>) -> Result<Vec<Stat>, String> {
                         .unwrap_or(0.0),
                     size: m.len(),
                 },
-                Err(_) => Stat { exists: false, is_dir: false, mtime: 0.0, size: 0 },
+                Err(_) => Stat {
+                    exists: false,
+                    is_dir: false,
+                    mtime: 0.0,
+                    size: 0,
+                },
             })
             .collect()
     })
@@ -194,7 +239,10 @@ fn inside_root(roots: &Roots, window: &WebviewWindow, path: &Path) -> Result<Pat
     // シンボリックリンクなどで外を指していないか、存在する部分は実体で確かめる
     let real = match fs::canonicalize(&p) {
         Ok(r) => r,
-        Err(_) => match (p.parent().and_then(|d| fs::canonicalize(d).ok()), p.file_name()) {
+        Err(_) => match (
+            p.parent().and_then(|d| fs::canonicalize(d).ok()),
+            p.file_name(),
+        ) {
             (Some(d), Some(n)) => d.join(n),
             _ => p.clone(),
         },
@@ -209,14 +257,26 @@ fn inside_root(roots: &Roots, window: &WebviewWindow, path: &Path) -> Result<Pat
 /// 新しい名前として使えるか（区切り文字や . / .. を含まない）
 fn check_name(name: &str) -> Result<(), String> {
     let n = name.trim();
-    if n.is_empty() || n == "." || n == ".." || n.contains('/') || n.contains('\\') || n.contains('\0') {
+    if n.is_empty()
+        || n == "."
+        || n == ".."
+        || n.contains('/')
+        || n.contains('\\')
+        || n.contains('\0')
+    {
         return Err("その名前は使えません".into());
     }
     Ok(())
 }
 
 #[tauri::command]
-fn create_entry(window: WebviewWindow, roots: State<Roots>, dir: String, name: String, is_dir: bool) -> Result<String, String> {
+fn create_entry(
+    window: WebviewWindow,
+    roots: State<Roots>,
+    dir: String,
+    name: String,
+    is_dir: bool,
+) -> Result<String, String> {
     check_name(&name)?;
     let target = Path::new(&dir).join(name.trim());
     let target = inside_root(&roots, &window, &target)?;
@@ -226,13 +286,22 @@ fn create_entry(window: WebviewWindow, roots: State<Roots>, dir: String, name: S
     if is_dir {
         fs::create_dir(&target).map_err(|e| e.to_string())?;
     } else {
-        fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| e.to_string())?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|e| e.to_string())?;
     }
     Ok(target.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-fn rename_entry(window: WebviewWindow, roots: State<Roots>, path: String, new_name: String) -> Result<String, String> {
+fn rename_entry(
+    window: WebviewWindow,
+    roots: State<Roots>,
+    path: String,
+    new_name: String,
+) -> Result<String, String> {
     check_name(&new_name)?;
     let from = inside_root(&roots, &window, Path::new(&path))?;
     let to = from.with_file_name(new_name.trim());
@@ -283,7 +352,11 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 
 /// ウィンドウごとのセッションファイル。最初のウィンドウは以前と同じ session.json。
 fn session_name(label: &str) -> String {
-    if label == "main" { "session.json".into() } else { format!("session-{label}.json") }
+    if label == "main" {
+        "session.json".into()
+    } else {
+        format!("session-{label}.json")
+    }
 }
 
 #[tauri::command]
@@ -331,7 +404,12 @@ struct FsChange {
     rescan: bool,
 }
 
-fn start_watch(app: &AppHandle, label: &str, root: Option<&Path>, files: Vec<PathBuf>) -> Result<watch::FolderWatch, String> {
+fn start_watch(
+    app: &AppHandle,
+    label: &str,
+    root: Option<&Path>,
+    files: Vec<PathBuf>,
+) -> Result<watch::FolderWatch, String> {
     // 開いたフォルダがリポジトリの途中なら、上にある .git も監視する（コミットやステージでも git の状態を更新するため）
     let extra: Vec<PathBuf> = root
         .and_then(git::find_git_dir)
@@ -340,16 +418,39 @@ fn start_watch(app: &AppHandle, label: &str, root: Option<&Path>, files: Vec<Pat
         .collect();
     let app = app.clone();
     let target = label.to_string();
-    watch::FolderWatch::start(root.map(Path::to_path_buf), extra, files, watch::Timing::default(), move |b| {
-        let ev = FsChange { paths: b.paths.iter().map(|p| p.to_string_lossy().to_string()).collect(), rescan: b.rescan };
-        let _ = app.emit_to(target.as_str(), "fs-change", ev);
-    })
+    watch::FolderWatch::start(
+        root.map(Path::to_path_buf),
+        extra,
+        files,
+        watch::Timing::default(),
+        move |b| {
+            let ev = FsChange {
+                paths: b
+                    .paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect(),
+                rescan: b.rescan,
+            };
+            let _ = app.emit_to(target.as_str(), "fs-change", ev);
+        },
+    )
 }
 
 #[tauri::command]
-fn watch_folder(app: AppHandle, window: WebviewWindow, state: State<WatchState>, roots: State<Roots>, root: String) -> Result<(), String> {
+fn watch_folder(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<WatchState>,
+    roots: State<Roots>,
+    root: String,
+) -> Result<(), String> {
     let label = window.label().to_string();
-    roots.0.lock().unwrap().insert(label.clone(), PathBuf::from(&root));
+    roots
+        .0
+        .lock()
+        .unwrap()
+        .insert(label.clone(), PathBuf::from(&root));
     let mut map = state.0.lock().unwrap();
     let files = map.remove(&label).map(|w| w.files).unwrap_or_default();
     let w = start_watch(&app, &label, Some(Path::new(&root)), files.clone())?;
@@ -359,7 +460,12 @@ fn watch_folder(app: AppHandle, window: WebviewWindow, state: State<WatchState>,
 
 /// 開いているファイルの一覧を伝える。フォルダの外のファイル（ドロップで開いたものなど）も監視する。
 #[tauri::command]
-fn watch_files(app: AppHandle, window: WebviewWindow, state: State<WatchState>, paths: Vec<String>) -> Result<(), String> {
+fn watch_files(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<WatchState>,
+    paths: Vec<String>,
+) -> Result<(), String> {
     let label = window.label().to_string();
     let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let mut map = state.0.lock().unwrap();
@@ -387,7 +493,11 @@ struct GitStatus {
 }
 
 #[tauri::command]
-async fn git_status(root: String, include_entries: bool, include_counts: bool) -> Result<Option<GitStatus>, String> {
+async fn git_status(
+    root: String,
+    include_entries: bool,
+    include_counts: bool,
+) -> Result<Option<GitStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let branch = git::branch(&root)?;
         let (mut entries, mut modified) = if include_entries || include_counts {
@@ -408,7 +518,12 @@ async fn git_status(root: String, include_entries: bool, include_counts: bool) -
         if !include_entries {
             entries.clear();
         }
-        Some(GitStatus { branch, entries, modified, added })
+        Some(GitStatus {
+            branch,
+            entries,
+            modified,
+            added,
+        })
     })
     .await
     .map_err(|e| e.to_string())
@@ -423,7 +538,11 @@ fn load_window_list(app: &AppHandle) -> Vec<String> {
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    if list.is_empty() { vec!["main".into()] } else { list }
+    if list.is_empty() {
+        vec!["main".into()]
+    } else {
+        list
+    }
 }
 
 fn save_window_list(app: &AppHandle, list: &[String]) {
@@ -442,7 +561,13 @@ fn cancel_quit(quitting: State<Quitting>) {
 }
 
 fn create_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
-    let mut cfg = app.config().app.windows.first().cloned().unwrap_or_default();
+    let mut cfg = app
+        .config()
+        .app
+        .windows
+        .first()
+        .cloned()
+        .unwrap_or_default();
     cfg.label = label.to_string();
     cfg.create = true;
     WebviewWindowBuilder::from_config(app, &cfg)?.build()
@@ -450,7 +575,13 @@ fn create_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
 
 /// ⌘N: 新しいウィンドウを開く（ウィンドウごとに別のフォルダを開ける）
 fn new_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    let label = format!("w{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    let label = format!(
+        "w{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
     let w = create_window(app, &label)?;
     let mut list: Vec<String> = app.webview_windows().keys().cloned().collect();
     list.sort();
@@ -500,7 +631,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let app_menu = SubmenuBuilder::new(app, "Mdock")
         .about(None)
         .separator()
-        .item(&MenuItemBuilder::with_id("settings", "設定…").accelerator("CmdOrCtrl+,").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("settings", "設定…")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?,
+        )
         .separator()
         .services()
         .separator()
@@ -511,14 +646,30 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .quit()
         .build()?;
     let file = SubmenuBuilder::new(app, "ファイル")
-        .item(&MenuItemBuilder::with_id("new-window", "新規ウインドウ").accelerator("CmdOrCtrl+N").build(app)?)
-        .item(&MenuItemBuilder::with_id("open-folder", "フォルダを開く…").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("new-window", "新規ウインドウ")
+                .accelerator("CmdOrCtrl+N")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open-folder", "フォルダを開く…")
+                .accelerator("CmdOrCtrl+O")
+                .build(app)?,
+        )
         .separator()
-        .item(&MenuItemBuilder::with_id("save", "保存").accelerator("CmdOrCtrl+S").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("save", "保存")
+                .accelerator("CmdOrCtrl+S")
+                .build(app)?,
+        )
         .separator()
         .item(&MenuItemBuilder::with_id("print", "印刷 / PDF に書き出し…").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::with_id("close-tab", "タブを閉じる").accelerator("CmdOrCtrl+W").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("close-tab", "タブを閉じる")
+                .accelerator("CmdOrCtrl+W")
+                .build(app)?,
+        )
         .close_window_with_text("ウインドウを閉じる")
         .build()?;
     let edit = SubmenuBuilder::new(app, "編集")
@@ -530,12 +681,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .paste_with_text("ペースト")
         .select_all_with_text("すべてを選択")
         .build()?;
-    let view = SubmenuBuilder::new(app, "表示").fullscreen_with_text("フルスクリーン").build()?;
+    let view = SubmenuBuilder::new(app, "表示")
+        .fullscreen_with_text("フルスクリーン")
+        .build()?;
     let window = SubmenuBuilder::new(app, "ウインドウ")
         .minimize_with_text("しまう")
         .maximize_with_text("拡大/縮小")
         .build()?;
-    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view, &window]).build()
+    MenuBuilder::new(app)
+        .items(&[&app_menu, &file, &edit, &view, &window])
+        .build()
 }
 
 /// メニューの操作を、いま前面にあるウィンドウに "menu" イベントで知らせる
@@ -580,14 +735,19 @@ pub fn run() {
                 app.state::<Roots>().0.lock().unwrap().remove(&label);
                 // 終了ではなくウィンドウを閉じただけなら、そのウィンドウは次回開き直さない（最後の1枚は残す）
                 if !app.state::<Quitting>().0.load(Ordering::SeqCst) {
-                    let mut rest: Vec<String> = app.webview_windows().keys().filter(|l| **l != label).cloned().collect();
+                    let mut rest: Vec<String> = app
+                        .webview_windows()
+                        .keys()
+                        .filter(|l| **l != label)
+                        .cloned()
+                        .collect();
                     if !rest.is_empty() {
                         rest.sort();
                         save_window_list(app, &rest);
-                        if let Ok(p) = config_file(app, &session_name(&label)) {
-                            if label != "main" {
-                                let _ = fs::remove_file(p);
-                            }
+                        if let Ok(p) = config_file(app, &session_name(&label))
+                            && label != "main"
+                        {
+                            let _ = fs::remove_file(p);
                         }
                     }
                 }
