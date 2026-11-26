@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type Entry } from "./api";
-import { markdownEntries, treeRows } from "./fileTree";
+import { treeRows } from "./fileTree";
 import { dirsToReread, indexTree, sameEntries, spliceTree } from "./liveReload";
 
 const root = "/workspace";
@@ -35,8 +35,8 @@ describe("未読フォルダ", () => {
 });
 
 describe("ツリーの表示", () => {
-  const visible = (entries: Entry[], open: Record<string, boolean>, mdOnly = false) =>
-    treeRows(mdOnly ? markdownEntries(entries) : entries, root, { open, expandTop: true, creating: null })
+  const visible = (entries: Entry[], open: Record<string, boolean>) =>
+    treeRows(entries, root, { open, expandTop: true, creating: null })
       .flatMap((row) => row.kind === "entry" ? [row.entry.path] : []);
 
   it("全体を差し替えても、展開と折りたたみの指定を保持する", () => {
@@ -45,11 +45,5 @@ describe("ツリーの表示", () => {
     expect(visible(shallow, open)).toEqual([docs, archive, empty]);
     expect(visible(complete, open)).toEqual([docs, archive, file.path, empty]);
     expect(visible(complete, { [docs]: false })).toEqual([docs]);
-  });
-
-  it("Markdown 絞り込みでは未読の枝を表示し、読み込み後に空の枝を除外する", () => {
-    const open = { [archive]: true };
-    expect(visible(shallow, open, true)).toEqual([docs, archive, empty]);
-    expect(visible(full, open, true)).toEqual([docs, archive, file.path]);
   });
 });

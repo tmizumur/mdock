@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ChevronRight, ChevronsDownUp, FilePlus, FolderPlus } from "lucide-react";
 import { Entry, copyText, createEntry, dirname, isMarkdown, norm, renameEntry, trashEntry } from "../lib/api";
-import { type Creating, type Row, isFolderOpen, markdownEntries, treeRows } from "../lib/fileTree";
+import { type Creating, type Row, isFolderOpen, treeRows } from "../lib/fileTree";
 import { TreeIcon, fileIcon, folderIcon } from "../lib/fileIcons";
 import { ContextMenu, type MenuItem } from "./Dialogs";
 import type { GitLookup, GitMark } from "../lib/git";
@@ -26,20 +26,13 @@ type Props = {
 
 const ROW_H = 28;
 
-export function ExplorerControls({ onCreate, onCollapse, mdOnly, onToggleMarkdown }: {
+export function ExplorerControls({ onCreate, onCollapse }: {
   onCreate?: (isDir: boolean) => void;
   onCollapse?: () => void;
-  mdOnly?: boolean;
-  onToggleMarkdown?: () => void;
 }) {
   return (
     <div className="sidebar-head">
       <span className="sidebar-label">エクスプローラー</span>
-      {onToggleMarkdown && (
-        <div className="segmented">
-          <button className={mdOnly ? "on" : ""} aria-pressed={mdOnly} onClick={onToggleMarkdown}>.md のみ</button>
-        </div>
-      )}
       <div className="explorer-actions">
         <button className="icon-btn" title="新規ファイル" aria-label="新規ファイル" disabled={!onCreate} onClick={() => onCreate?.(false)}>
           <FilePlus size={15} />
@@ -63,7 +56,6 @@ export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirec
   const scroller = useRef<HTMLDivElement>(null);
   const [expandTop, setExpandTop] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [mdOnly, setMdOnly] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -71,13 +63,9 @@ export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirec
 
   const isOpen = (e: Entry, depth: number) => isFolderOpen(e.path, depth, open, expandTop);
 
-  const visibleEntries = useMemo(
-    () => mdOnly ? markdownEntries(entries, creating?.dir) : entries,
-    [entries, mdOnly, creating?.dir],
-  );
   const rows = useMemo(
-    () => treeRows(visibleEntries, root, { open, expandTop, creating }),
-    [visibleEntries, root, open, expandTop, creating],
+    () => treeRows(entries, root, { open, expandTop, creating }),
+    [entries, root, open, expandTop, creating],
   );
 
   const virt = useVirtualizer({
@@ -89,7 +77,6 @@ export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirec
     getScrollElement: () => scroller.current,
     estimateSize: () => ROW_H,
     overscan: 12,
-    anchorTo: "end",
   });
 
   useLayoutEffect(() => {
@@ -234,7 +221,7 @@ export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirec
 
   return (
     <>
-      <ExplorerControls mdOnly={mdOnly} onToggleMarkdown={() => setMdOnly((v) => !v)} onCreate={createInSelection} onCollapse={() => {
+      <ExplorerControls onCreate={createInSelection} onCollapse={() => {
         setExpandTop(false);
         setOpen({});
         setCreating(null);

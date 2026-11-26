@@ -1,4 +1,4 @@
-import { type Entry, isMarkdown, norm } from "./api";
+import { type Entry, norm } from "./api";
 
 export type Creating = { dir: string; isDir: boolean };
 export type Row =
@@ -7,15 +7,6 @@ export type Row =
 
 export function isFolderOpen(path: string, depth: number, open: Record<string, boolean>, expandTop: boolean) {
   return open[path] ?? (expandTop && depth === 0);
-}
-
-export function markdownEntries(entries: Entry[], creatingIn?: string): Entry[] {
-  return entries.flatMap((entry) => {
-    if (!entry.is_dir) return isMarkdown(entry.name) ? [entry] : [];
-    if (entry.loaded === false) return [entry];
-    const children = markdownEntries(entry.children, creatingIn);
-    return children.length || entry.path === creatingIn ? [{ ...entry, children }] : [];
-  });
 }
 
 export function treeRows(
