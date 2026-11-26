@@ -86,6 +86,36 @@ describe("Markdown の描画", () => {
     expect(html.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AA==");
   });
 
+  it.each(["fixed", "ABSOLUTE !important", "sticky", "var(--pos)"])(
+    "生 HTML の position: %s と重なりを制御する宣言を除去する",
+    (position) => {
+      const html = render(`<a style="position:${position};inset:0;z-index:9999" href="https://example.com">リンク</a>`);
+
+      expect(html.querySelector("a")?.hasAttribute("style")).toBe(false);
+    },
+  );
+
+  it("生 HTML ブロック内の KaTeX と色のスタイルを残す", async () => {
+    await loadMath();
+    const html = render([
+      '<div id="math-block" style="position:relative;top:1px;z-index:9999;color:var(--fg);background-color:var(--bg)">',
+      "",
+      "$\\frac{1}{2}$",
+      "",
+      "</div>",
+    ].map((line) => `> ${line}`).join("\n"));
+
+    const style = html.querySelector<HTMLDivElement>("#math-block")?.style;
+    expect(style?.position).toBe("relative");
+    expect(style?.top).toBe("1px");
+    expect(style?.zIndex).toBe("");
+    expect(style?.color).toBe("var(--fg)");
+    expect(style?.backgroundColor).toBe("var(--bg)");
+    expect(html.querySelector("#math-block .katex-html span[style*='height:']")).not.toBeNull();
+    expect(html.querySelector("#math-block .katex-html span[style*='vertical-align:']")).not.toBeNull();
+    expect(html.querySelector("#math-block .katex-html span[style*='top:']")).not.toBeNull();
+  });
+
   it("インライン HTML の危険な属性を除去する", () => {
     const html = render('本文 <kbd onmouseover="alert(1)">⌘</kbd> <img src="./a.png" onerror="alert(1)">');
 

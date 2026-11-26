@@ -21,6 +21,22 @@ export function sanitizeMarkdown(html: string) {
   for (const input of body.querySelectorAll("input")) {
     if (input.type !== "checkbox" || !input.disabled) input.remove();
   }
+  const style = document.createElement("span").style;
+  for (const node of body.querySelectorAll("[style]")) {
+    style.cssText = node.getAttribute("style") ?? "";
+    // CSS 変数や継承で危険な position に変わる値も除く。
+    const unsafePosition = style.position !== "" && style.position !== "relative" && style.position !== "static";
+    if (!unsafePosition && !style.getPropertyValue("z-index")) continue;
+    if (unsafePosition) {
+      style.removeProperty("position");
+      for (const name of Array.from(style)) {
+        if (/^(?:inset(?:-.*)?|top|right|bottom|left)$/.test(name)) style.removeProperty(name);
+      }
+    }
+    style.removeProperty("z-index");
+    if (style.cssText) node.setAttribute("style", style.cssText);
+    else node.removeAttribute("style");
+  }
   for (const node of body.querySelectorAll("[href], [src], [srcset]")) {
     const href = node.getAttribute("href");
     if (href !== null && isBlockedLink(href)) node.removeAttribute("href");

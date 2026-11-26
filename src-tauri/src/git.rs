@@ -183,14 +183,30 @@ fn git_command(dir: &Path) -> Option<Command> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let mut command = git_command(dir)?;
+    git_with(&|| git_command(dir), args)
+}
+
+fn git_with(make_command: &impl Fn() -> Option<Command>, args: &[&str]) -> Option<Vec<u8>> {
+    let mut command = make_command()?;
     if args.first() == Some(&"status") {
-        // インデックスを書き込まなくても、変更確認中に外部フィルターが動く。
-        let keys = git(
-            dir,
-            &["config", "--includes", "--null", "--name-only", "--list"],
+        // 変更確認中にリポジトリの設定で外部フィルターを起動させない。
+        let keys = git_with(
+            make_command,
+            &[
+                "config",
+                "--show-scope",
+                "--includes",
+                "--null",
+                "--name-only",
+                "--list",
+            ],
         )?;
-        for key in std::str::from_utf8(&keys).ok()?.split_terminator('\0') {
+        let mut fields = std::str::from_utf8(&keys).ok()?.split_terminator('\0');
+        while let Some(scope) = fields.next() {
+            let key = fields.next()?;
+            if !matches!(scope, "local" | "worktree") {
+                continue;
+            }
             let Some((_, setting)) = key
                 .strip_prefix("filter.")
                 .and_then(|key| key.rsplit_once('.'))
@@ -245,7 +261,12 @@ pub fn status(
         .to_string_lossy()
         .replace('\\', "/");
     // 件数を表示するときは、未追跡フォルダの中もファイル単位で数える。
-    let mut args = vec!["status", "--porcelain=v1", "-z", "--ignore-submodules=all"];
+    let mut args = vec![
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--ignore-submodules=dirty",
+    ];
     if include_ignored {
         args.push("--ignored=matching");
     }
@@ -456,6 +477,57 @@ mod tests {
         for marker in ["fsmonitor-ran", "hook-ran", "filter-ran"] {
             assert!(!base.join(".git").join(marker).exists(), "{marker}");
         }
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_keeps_global_filters_unless_defined_in_repo() {
+        use std::fs::{self, FileTimes};
+        use std::time::{Duration, SystemTime};
+
+        if git_bin().is_none() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("mdock-git-global-{}", std::process::id()));
+        fs::create_dir(&base).unwrap();
+        let global = base.join("global.gitconfig");
+        let make_command = || {
+            let mut command = git_command(&base)?;
+            command.env("GIT_CONFIG_GLOBAL", &global);
+            Some(command)
+        };
+        let run =
+            |args: &[&str]| git_with(&make_command, args).unwrap_or_else(|| panic!("git {args:?}"));
+        run(&["init", "-q", "--template="]);
+        fs::write(
+            &global,
+            "[filter \"test\"]\n\tclean = sed s/working/stored/\n",
+        )
+        .unwrap();
+        fs::create_dir(base.join(".git/info")).unwrap();
+        fs::write(base.join(".git/info/attributes"), "a.md filter=test\n").unwrap();
+        let file = base.join("a.md");
+        fs::write(&file, "working\n").unwrap();
+        run(&["add", "a.md"]);
+        fs::File::open(&file)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(60)))
+            .unwrap();
+
+        let status = ["status", "--porcelain=v1", "-z", "--", "a.md"];
+        assert_eq!(run(&status), b"A  a.md\0");
+
+        let filter = "[filter \"test\"]\n\tclean = : > .git/filter-ran; cat\n";
+        fs::write(base.join(".git/filters"), filter).unwrap();
+        run(&["config", "include.path", "filters"]);
+        assert_eq!(run(&status), b"AM a.md\0");
+        run(&["config", "--unset", "include.path"]);
+
+        run(&["config", "extensions.worktreeConfig", "true"]);
+        fs::write(base.join(".git/config.worktree"), filter).unwrap();
+        assert_eq!(run(&status), b"AM a.md\0");
+        assert!(!base.join(".git/filter-ran").exists());
         fs::remove_dir_all(base).unwrap();
     }
 }
