@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { slug } from "github-slugger";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -14,6 +15,7 @@ import {
 import { confirmOpenUrl, copyText, safeDecode, statPaths } from "../lib/api";
 import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find";
 import { classifyLink, localLinkAction } from "../lib/links";
+import { FILES_CHANGED, changeMatcher, pathKey } from "../lib/liveReload";
 import { useSettings } from "../lib/settings";
 
 export type FindQuery = { query: string; index: number };
@@ -30,6 +32,7 @@ type Props = {
   onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンク） */
   anchor?: { id: string; nonce: number };
+  onAnchorScrolled?: () => void;
   find?: FindQuery;
   onFindResult?: (r: FindResult) => void;
   /** 描画し直したとき（見出しの位置などが変わったとき）に呼ぶ */
@@ -60,18 +63,28 @@ function useSettledContent(path: string, content: string, immediate: boolean) {
 
 /** 見出しの id から要素を探す（エンコードの違いを吸収） */
 function findAnchor(root: HTMLElement, raw: string): HTMLElement | null {
+  if (!raw) return null;
   const decoded = safeDecode(raw);
-  const cands = [raw, decoded, encodeURIComponent(decoded), encodeURIComponent(decoded.trim().toLowerCase().replace(/\s+/g, "-"))];
-  for (const c of cands) {
+  for (const c of new Set([raw, decoded, encodeURIComponent(decoded)])) {
     const el = root.querySelector<HTMLElement>(`[id="${CSS.escape(c)}"], a[name="${CSS.escape(c)}"]`);
     if (el) return el;
   }
-  return null;
+  const legacy = CSS.escape(decoded.trim().toLowerCase().replace(/\s+/g, "-"));
+  const github = CSS.escape(slug(decoded));
+  return root.querySelector<HTMLElement>(`[data-legacy-anchor="${legacy}"]`) ??
+    root.querySelector<HTMLElement>(`[id="${github}"]`);
 }
 
+// タブや表示モードを切り替えても、同じリンクの要求には戻らない。
+const handledAnchors = new WeakSet<NonNullable<Props["anchor"]>>();
+
+const localImageUrl = /^asset:\/\/localhost\/([^?#]+)/i;
+
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */
-function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFindResult, onRendered, immediate = false }: Props) {
+function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, find, onFindResult, onRendered, immediate = false }: Props) {
   const ref = useRef<HTMLElement>(null);
+  const lastAnchorNonce = useRef<number>(undefined);
+  const imageVersions = useRef({ version: 0, paths: new Map<string, number>() });
   const { settings } = useSettings();
   const source = useSettledContent(path, content, immediate);
   const [mathOn, setMathOn] = useState(mathReady());
@@ -90,11 +103,31 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
   useLayoutEffect(() => {
     const root = ref.current;
     if (!root) return;
-    for (const img of root.querySelectorAll<HTMLImageElement>("img:not([data-local])")) {
+    const images: { img: HTMLImageElement; path: string; url: string }[] = [];
+    for (const img of root.querySelectorAll<HTMLImageElement>("img")) {
       const src = img.getAttribute("src") ?? "";
-      if (isRelative(src)) img.src = localSrc(path, src);
-      img.dataset.local = "1";
+      if (!img.hasAttribute("data-local") && (isRelative(src) || /^\/(?!\/)/.test(src))) {
+        img.src = localSrc(path, src);
+        img.dataset.local = "1";
+      }
+      const asset = img.dataset.local === "1" && localImageUrl.exec(img.getAttribute("src") ?? "");
+      if (!asset) continue;
+      const file = safeDecode(asset[1]);
+      const version = imageVersions.current.paths.get(pathKey(file));
+      if (version !== undefined) img.src = `${asset[0]}?v=${version}`;
+      images.push({ img, path: file, url: asset[0] });
     }
+    const onFilesChanged = ({ detail }: WindowEventMap[typeof FILES_CHANGED]) => {
+      const matches = changeMatcher(detail);
+      const versions = imageVersions.current;
+      const version = versions.version = Math.max(Date.now(), versions.version + 1);
+      for (const { img, path, url } of images) {
+        if (!matches(path)) continue;
+        versions.paths.set(pathKey(path), version);
+        img.src = `${url}?v=${version}`;
+      }
+    };
+    if (images.length) window.addEventListener(FILES_CHANGED, onFilesChanged);
     setDomVersion((v) => v + 1);
     onRendered?.();
 
@@ -121,15 +154,21 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
     return () => {
       io.disconnect();
       root.removeEventListener("load", onLoad, true);
+      window.removeEventListener(FILES_CHANGED, onFilesChanged);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html]);
+  }, [html, path]);
 
   // 別ファイルの見出しへのリンクで開いたとき、その見出しへ移動
   useEffect(() => {
-    if (!anchor || !ref.current) return;
-    findAnchor(ref.current, anchor.id)?.scrollIntoView({ block: "start" });
-  }, [anchor?.nonce, html]);
+    if (!anchor || lastAnchorNonce.current === anchor.nonce || handledAnchors.has(anchor) || !ref.current) return;
+    const target = findAnchor(ref.current, anchor.id);
+    if (!target) return;
+    lastAnchorNonce.current = anchor.nonce;
+    handledAnchors.add(anchor);
+    target.scrollIntoView({ block: "start" });
+    onAnchorScrolled?.();
+  }, [anchor, html, onAnchorScrolled]);
 
   // ファイル内検索
   const query = find?.query ?? "";

@@ -275,6 +275,22 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .copy-btn:hover { background: var(--bg-hover); color: var(--fg); }
 .copy-btn.done { color: var(--accent); border-color: var(--accent); }
 .markdown-body blockquote { margin: 0; padding: 0 1em; color: var(--fg-muted); border-left: 4px solid var(--border); }
+.markdown-body .front-matter { margin: 1em 0; }
+.markdown-body .front-matter summary { cursor: pointer; }
+.markdown-body .front-matter table { margin-top: 0.5em; }
+.markdown-body .front-matter td { white-space: pre-wrap; }
+.markdown-body .markdown-alert {
+  --alert-color: var(--accent);
+  margin: 1em 0; padding: 0.5em 1em; border-left: 4px solid var(--alert-color);
+}
+.markdown-body .markdown-alert-tip { --alert-color: var(--git-added); }
+.markdown-body .markdown-alert-important { --alert-color: var(--code-keyword); }
+.markdown-body .markdown-alert-warning { --alert-color: var(--git-modified); }
+.markdown-body .markdown-alert-caution { --alert-color: var(--danger); }
+.markdown-body .markdown-alert-title { margin: 0; color: var(--alert-color); font-weight: 600; }
+.markdown-body .markdown-alert > :last-child { margin-bottom: 0; }
+.markdown-body hr.footnotes-sep { margin: 1.5em 0 0.75em; }
+.markdown-body .footnotes { font-size: 0.875em; }
 .markdown-body table { border-collapse: collapse; display: block; overflow: auto; }
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 12px; }
 .markdown-body th { background: var(--bg-side); }

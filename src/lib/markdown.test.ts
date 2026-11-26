@@ -42,6 +42,14 @@ describe("Markdown の描画", () => {
     );
   });
 
+  it("GitHub 形式のアンカーを付け、重複を文書ごとに数える", () => {
+    const src = "# Setup: Install\n\n# 日本語の 見出し\n\n# C++ & Rust\n\n# Setup: Install\n\n# Setup: Install";
+    const ids = () => Array.from(render(src).querySelectorAll("h1"), (heading) => heading.id);
+
+    expect(ids()).toEqual(["setup-install", "日本語の-見出し", "c--rust", "setup-install-1", "setup-install-2"]);
+    expect(ids()[0]).toBe("setup-install");
+  });
+
   it("タスクリストを未チェックとチェック済みのチェックボックスに変換する", () => {
     const items = Array.from(render("- [ ] 未完了\n- [x] 完了").querySelectorAll("ul > li"));
     const boxes = items.map((item) => item.querySelector<HTMLInputElement>('input[type="checkbox"]'));
@@ -49,6 +57,70 @@ describe("Markdown の描画", () => {
     expect(boxes.map((box) => box?.checked)).toEqual([false, true]);
     expect(boxes.map((box) => box?.disabled)).toEqual([true, true]);
     expect(items.map((item) => item.textContent?.trim())).toEqual(["未完了", "完了"]);
+  });
+
+  it("チェックボックス化をリスト項目の最初の段落に限定する", () => {
+    const html = render("[x] 本文\n\n> [x] 引用\n\n1. [x] 項目\n\n   [x] 続き\n\n   - [ ] 下位項目");
+
+    expect(html.querySelectorAll("input[type='checkbox']")).toHaveLength(2);
+    expect(html.querySelector("ol > li > p > input:checked")).not.toBeNull();
+    expect(html.querySelector("li > ul > li > input:not(:checked)")).not.toBeNull();
+    expect(Array.from(html.querySelectorAll("p"), (p) => p.textContent)).toEqual([
+      "[x] 本文", "[x] 引用", " 項目", "[x] 続き",
+    ]);
+  });
+
+  it.each(["---", "..."])("フロントマターを表にし、%s 以降の行番号を保つ", (end) => {
+    const src = [
+      "---", "title: <em>題名</em>", "tags: [a, b]", "author:", "  name: 太郎",
+      "# YAML 内のコメント", end, "", "# 見出し", "", "本文",
+    ].join("\r\n");
+    const html = render(src);
+
+    expect(html.querySelector("details.front-matter[data-line='0'] > summary")?.textContent).toBe("フロントマター");
+    expect(Array.from(html.querySelectorAll("details td"), (cell) => cell.textContent)).toEqual([
+      "<em>題名</em>", "[a, b]", "  name: 太郎",
+    ]);
+    expect(html.querySelector("details em, hr")).toBeNull();
+    expect(html.querySelector("h1")?.dataset.line).toBe("8");
+    expect(html.querySelector("p")?.dataset.line).toBe("10");
+    expect(markdownHeadings(src)).toEqual([{ level: 1, text: "見出し", line: 8 }]);
+  });
+
+  it("閉じていない区切りや途中の横線は Markdown として扱う", () => {
+    expect(render("---\n\n本文").querySelector("hr")).not.toBeNull();
+    expect(render("本文\n\n---\n\n---").querySelectorAll("hr")).toHaveLength(2);
+  });
+
+  it.each([
+    ["NOTE", "note", "Note"],
+    ["tip", "tip", "Tip"],
+    ["IMPORTANT", "important", "Important"],
+    ["Warning", "warning", "Warning"],
+    ["CAUTION", "caution", "Caution"],
+  ])("引用の [!%s] を注記に変換する", (marker, kind, title) => {
+    const html = render(`> [!${marker}]  \n> **本文**\n>\n> 続き\n\n> 通常の引用\n> [!NOTE]`);
+    const alert = html.querySelector(`div.markdown-alert.markdown-alert-${kind}[data-line='0']`);
+
+    expect(alert?.querySelector(".markdown-alert-title")?.textContent).toMatch(new RegExp(` ${title}$`));
+    expect(alert?.querySelector("strong")?.textContent).toBe("本文");
+    expect(alert?.lastElementChild?.textContent).toBe("続き");
+    expect(alert?.textContent).not.toContain("[!");
+    expect(html.querySelector("blockquote")?.textContent).toContain("[!NOTE]");
+  });
+
+  it("生 HTML を含む脚注でも、複数の参照と戻り先の ID が一致する", () => {
+    const html = render("本文 <kbd>キー</kbd>[^1]、再参照[^1]。\n\n[^1]: 脚注の <em>本文</em>。\n\n    続きの段落。");
+    const refs = Array.from(html.querySelectorAll(".footnote-ref a"));
+    const footnote = html.querySelector(".footnotes .footnote-item");
+
+    expect(footnote?.id).toBe("fn1");
+    expect(footnote?.querySelector("em")?.textContent).toBe("本文");
+    expect(footnote?.querySelectorAll("p")).toHaveLength(2);
+    expect(refs.map((ref) => ref.getAttribute("href"))).toEqual(["#fn1", "#fn1"]);
+    expect(refs.map((ref) => ref.id)).toEqual(["fnref1", "fnref1:1"]);
+    expect(Array.from(footnote?.querySelectorAll(".footnote-backref") ?? [], (link) => link.getAttribute("href")))
+      .toEqual(refs.map((ref) => `#${ref.id}`));
   });
 
   it("KaTeX の読み込み後にインラインとブロックの数式を描画する", async () => {

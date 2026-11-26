@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type Entry, norm, readDirs, readText, readTree, statPaths, watchFiles } from "../lib/api";
-import { type FsChange, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "../lib/liveReload";
+import { type FsChange, FILES_CHANGED, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "../lib/liveReload";
 import { type DocTab, type Tab } from "../lib/tabs";
 import { allTabs, filesOf, mapTabs } from "../lib/workspace";
 import { type useFolder } from "./useFolder";
@@ -159,6 +159,7 @@ export function useLiveReload(
   useEffect(() => {
     const un = listen<FsChange>("fs-change", (ev) => {
       const change = { paths: ev.payload.paths ?? [], rescan: !!ev.payload.rescan };
+      window.dispatchEvent(new CustomEvent(FILES_CHANGED, { detail: change }));
       reloadTabs(change);
       refreshTreeFor(change);
     });

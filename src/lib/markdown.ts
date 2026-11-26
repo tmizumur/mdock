@@ -1,5 +1,7 @@
 import MarkdownIt from "markdown-it";
 import anchor from "markdown-it-anchor";
+import footnote from "markdown-it-footnote";
+import GithubSlugger from "github-slugger";
 import type { HighlighterGeneric } from "shiki";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath, safeDecode } from "./api";
@@ -89,7 +91,7 @@ const escapeHtml = (s: string) =>
 
 const COPY_BTN = `<button class="copy-btn" type="button" title="コードをコピー">コピー</button>`;
 
-type Env = { base?: string; sanitizeDocument?: boolean };
+type Env = { base?: string; sanitizeDocument?: boolean; slugger?: GithubSlugger };
 
 const md = new MarkdownIt({ html: true, linkify: true, typographer: false });
 
@@ -146,7 +148,84 @@ md.renderer.rules.fence = (tokens, idx, _options, env) => {
   return `<div class="code-block"${line}>${COPY_BTN}${inner}</div>`;
 };
 
-md.use(anchor, { slugify: (s: string) => encodeURIComponent(s.trim().toLowerCase().replace(/\s+/g, "-")) });
+md.use(footnote);
+md.use(anchor, {
+  slugifyWithState: (title, state) => {
+    const env = state.env as Env;
+    return (env.slugger ??= new GithubSlugger()).slug(title);
+  },
+  callback: (token, { slug, title }) => {
+    const legacy = title.trim().toLowerCase().replace(/\s+/g, "-");
+    if (legacy !== slug) token.attrSet("data-legacy-anchor", legacy);
+  },
+});
+
+// 先頭のフロントマターを元の行番号のまま取り込む。
+md.block.ruler.before("table", "front_matter", (state, start, end, silent) => {
+  const lineAt = (i: number) => state.src.slice(state.bMarks[i], state.eMarks[i]);
+  if (start !== 0 || state.level !== 0 || !/^\uFEFF?---[ \t]*$/.test(lineAt(0))) return false;
+  let close = 1;
+  while (close < end && !/^(?:---|\.\.\.)[ \t]*$/.test(lineAt(close))) close++;
+  if (close === end) return false;
+  if (silent) return true;
+  const token = state.push("front_matter", "details", 0);
+  token.map = [0, close + 1];
+  token.content = state.src.slice(state.bMarks[1], state.bMarks[close]);
+  state.line = close + 1;
+  return true;
+});
+
+md.renderer.rules.front_matter = (tokens, idx) => {
+  const rows: [string, string][] = [];
+  for (const line of tokens[idx].content.split("\n")) {
+    const field = /^([^\s:#][^:]*):(?:[ \t]+|$)(.*)$/.exec(line);
+    if (field) rows.push([field[1].trimEnd(), field[2]]);
+    else if (/^(?:[ \t]+\S|-[ \t])/.test(line) && rows.length) {
+      const row = rows[rows.length - 1];
+      row[1] += row[1] ? `\n${line}` : line;
+    }
+  }
+  const body = rows.map(([key, value]) => `<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(value)}</td></tr>`).join("");
+  return `<details class="front-matter" data-line="0"><summary>フロントマター</summary><table><tbody>${body}</tbody></table></details>\n`;
+};
+
+const alertIcons = {
+  note: "ⓘ",
+  tip: "✦",
+  important: "‼",
+  warning: "⚠︎",
+  caution: "⛔︎",
+};
+
+// 注記の記号だけを取り除き、本文は通常どおりインライン解析する。
+md.core.ruler.before("inline", "markdown-alert", ({ tokens }) => {
+  const levels = new Set<number>();
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.type === "blockquote_close" && levels.delete(token.level)) {
+      token.tag = "div";
+    }
+    if (token.type !== "blockquote_open" || tokens[i + 1]?.type !== "paragraph_open") continue;
+    const inline = tokens[i + 2];
+    const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\n|$)/i.exec(inline.content);
+    if (!match) continue;
+    const kind = match[1].toLowerCase() as keyof typeof alertIcons;
+    levels.add(token.level);
+    token.type = "alert_open";
+    token.tag = "div";
+    token.content = kind;
+    token.attrSet("class", `markdown-alert markdown-alert-${kind}`);
+    inline.content = inline.content.slice(match[0].length);
+    if (!inline.content) tokens.splice(i + 1, 3);
+  }
+});
+
+md.renderer.rules.alert_open = (tokens, idx, options, _env, self) => {
+  const kind = tokens[idx].content as keyof typeof alertIcons;
+  const title = kind[0].toUpperCase() + kind.slice(1);
+  return self.renderToken(tokens, idx, options) +
+    `<p class="markdown-alert-title"><span aria-hidden="true">${alertIcons[kind]}</span> ${title}</p>\n`;
+};
 
 /** 相対パス（./img.png, ../a b.png, 日本語.png など）か */
 export const isRelative = (src: string) => !!src && !/^([a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(src);
@@ -171,7 +250,7 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 };
 
 // ブロック要素に元の Markdown の行番号を付ける（スクロール同期用）
-for (const name of ["paragraph_open", "heading_open", "bullet_list_open", "ordered_list_open", "table_open", "blockquote_open", "hr", "html_block"]) {
+for (const name of ["paragraph_open", "heading_open", "bullet_list_open", "ordered_list_open", "table_open", "blockquote_open", "alert_open", "hr", "html_block"]) {
   const orig = md.renderer.rules[name];
   md.renderer.rules[name] = (tokens, idx, options, env, self) => {
     const t = tokens[idx];
@@ -190,9 +269,11 @@ for (const name of ["paragraph_open", "heading_open", "bullet_list_open", "order
 md.renderer.rules.task_checkbox = (tokens, idx) =>
   `<input type="checkbox" disabled ${tokens[idx].content ? "checked" : ""}> `;
 
-md.core.ruler.after("inline", "task-list", (state: any) => {
-  for (const token of state.tokens) {
-    if (token.type !== "inline" || !token.children?.length) continue;
+md.core.ruler.after("inline", "task-list", (state) => {
+  for (let i = 0; i < state.tokens.length; i++) {
+    if (state.tokens[i].type !== "list_item_open" || state.tokens[i + 1]?.type !== "paragraph_open") continue;
+    const token = state.tokens[i + 2];
+    if (!token.children?.length) continue;
     const first = token.children[0];
     const m = first.type === "text" ? /^\[([ xX])\]\s/.exec(first.content) : null;
     if (!m) continue;
@@ -211,12 +292,14 @@ export function renderMarkdown(src: string, base?: string) {
   let html = "";
   let start = 0;
   let blockStart = 0;
+  let depth = 0;
   let hasRawHtml = false;
   // 生 HTML を含む最上位のブロックだけを無害化する。
   for (const [i, token] of tokens.entries()) {
     hasRawHtml ||= token.type === "html_block" ||
       (token.children?.some((child) => child.type === "html_inline") ?? false);
-    if (token.level !== 0 || token.nesting === 1) continue;
+    depth += token.nesting;
+    if (depth !== 0) continue;
     const end = i + 1;
     if (hasRawHtml) {
       html += render(start, blockStart);
