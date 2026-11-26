@@ -3,7 +3,6 @@ import { openNewWindow } from "../lib/api";
 import { leaves } from "../lib/layout";
 import { DEFAULT_SETTINGS, type useSettings } from "../lib/settings";
 import { activeTab, emptyPane } from "../lib/tabs";
-import { type useFolder } from "./useFolder";
 import { type useMenuActions } from "./useMenuActions";
 import { type usePaneActions } from "./usePaneActions";
 import { type useWorkspace } from "./useWorkspace";
@@ -13,7 +12,6 @@ export function useShortcuts(
     Pick<ReturnType<typeof useWorkspace>, "livePane" | "activeRef" | "cycleTab" | "closeActiveTab" | "wsRef" | "toggleSplit" | "splitTab" | "focusPane" | "splitWith">,
   { findInPane, toggleMode }: Pick<ReturnType<typeof usePaneActions>, "findInPane" | "toggleMode">,
   actions: ReturnType<typeof useMenuActions>,
-  pickFolder: ReturnType<typeof useFolder>["pickFolder"],
   updateSettings: ReturnType<typeof useSettings>["update"],
   setSettingsOpen: (open: boolean) => void,
   setError: (error: string | null) => void,
@@ -57,7 +55,7 @@ export function useShortcuts(
         openNewWindow().catch((err) => setError(String(err)));
       } else if (k === "o") {
         e.preventDefault();
-        pickFolder();
+        actions.current[e.shiftKey ? "open-folder" : "open-file"]();
       } else if (k === "w") {
         e.preventDefault();
         closeActiveTab();

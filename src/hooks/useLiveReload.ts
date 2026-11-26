@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type Entry, type TextInfo, norm, readDirs, readTextResult, readTree, statPaths, watchFiles } from "../lib/api";
-import { type FsChange, FILES_CHANGED, changeMatcher, dirsToReread, indexTree, irrelevantForTree, matchedAncestor, pathKey, sameEntries, spliceTree } from "../lib/liveReload";
+import { type FsChange, FILES_CHANGED, changeMatcher, dirsToReread, indexTree, irrelevantForTree, isMoveMatch, matchedAncestor, pathKey, sameEntries, spliceTree } from "../lib/liveReload";
 import { type DocTab, type Tab, isDirty, receiveDiffText, receiveDocText } from "../lib/tabs";
 import { allTabs, filesOf, mapTabs } from "../lib/workspace";
 import { type useFolder } from "./useFolder";
@@ -28,6 +28,8 @@ export function useLiveReload(
       const match = changeMatcher(change);
       const targets = filesOf(wsRef.current).filter(match);
       if (!targets.length) return;
+      const previousTree = treeRef.current;
+      const previousRoot = rootRef.current;
       const gens = targets.map((p) => {
         const g = (readGen.current.get(p) ?? 0) + 1;
         readGen.current.set(p, g);
@@ -51,22 +53,33 @@ export function useLiveReload(
       };
       const gone = targets.filter((p) => resultFor(p)?.error?.code === "not_found");
 
-      // 同じ変更の中に同じ内容のファイルがあれば移動先とみなす。
+      // 同じ変更で新しく現れたパスだけを移動先の候補にする
       const moved = new Map<string, { path: string; info: TextInfo }>();
       if (gone.length && !change.rescan) {
+        const previous = indexTree(previousTree);
         const open = new Set(filesOf(wsRef.current).map(pathKey));
-        const cands = change.paths.filter((c) => !open.has(pathKey(c))).slice(0, 20);
+        if (previousRoot) open.add(pathKey(previousRoot));
+        const cands = change.paths.filter((c) => {
+          const key = pathKey(c);
+          return !open.has(key) && !previous.has(key);
+        }).slice(0, 20);
+        const ancestors = new Map(gone.map((g) => [g, matchedAncestor(change.paths, g)]));
+        const folders = [...new Set([...ancestors].flatMap(([g, anc]) =>
+          anc && pathKey(anc) !== pathKey(g) ? [anc] : [],
+        ))];
+        const stats = cands.length && folders.length ? await statPaths(folders).catch(() => []) : [];
+        const goneFolders = new Set(folders.filter((_, i) => stats[i]?.exists === false));
         for (const g of gone) {
           const tab = tabs.find((t): t is DocTab => t.kind === "doc" && t.path === g && !t.readError);
-          const anc = tab && matchedAncestor(change.paths, g);
-          if (!tab || !anc) continue;
+          const anc = ancestors.get(g);
+          if (!tab?.saved.trim() || !anc || (pathKey(anc) !== pathKey(g) && !goneFolders.has(anc))) continue;
           const rest = norm(g).slice(norm(anc).length); // フォルダごと動いたときの、その中での位置
           for (const c of cands) {
             if (pathKey(c) === pathKey(anc)) continue;
             const to = norm(c) + rest;
             if ([...moved.values()].some((entry) => entry.path === to)) continue;
             const { info } = await readTextResult(to, tab.force);
-            if (info?.text === tab.saved) {
+            if (info && isMoveMatch(previous, to, tab.saved, info.text)) {
               moved.set(g, { path: to, info });
               break;
             }
@@ -110,7 +123,7 @@ export function useLiveReload(
         }),
       );
     },
-    [apply, wsRef],
+    [apply, rootRef, treeRef, wsRef],
   );
 
   /** ツリーの部分更新の順番待ち（読み直している間に届いた変更は、終わってからまとめて読む） */

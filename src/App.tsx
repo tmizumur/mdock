@@ -15,7 +15,7 @@ import { useMenuActions } from "./hooks/useMenuActions";
 import { usePaneActions } from "./hooks/usePaneActions";
 import { usePersist, useRestoreSession } from "./hooks/useSession";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { useFinderOpen, useWindowDrop, useWindowTitle } from "./hooks/useWindowEvents";
+import { useFileOpen, useWindowTitle } from "./hooks/useWindowEvents";
 import { useWorkspace, useWorkspaceDrop } from "./hooks/useWorkspace";
 import { useDragPos, useDrag } from "./lib/dnd";
 import { type LayoutNode } from "./lib/layout";
@@ -46,13 +46,12 @@ export default function App() {
   const { schedulePersist, flush } = usePersist(session, folder, workspace, ask);
   useWindowTitle(root);
   const { watchKey, watchedFiles } = useLiveReload(ready, folder, workspace);
-  useWindowDrop(openFolder, workspace);
-  useFinderOpen(ready, folder, workspace);
+  const pickFiles = useFileOpen(ready, folder, workspace, setError);
 
   const paneActions = usePaneActions(workspace);
   const { commands, menu, setMenu, openTabMenu, printPane } = paneActions;
-  const actions = useMenuActions(workspace, pickFolder, printPane, setSettingsOpen);
-  useShortcuts(workspace, paneActions, actions, pickFolder, updateSettings, setSettingsOpen, setError);
+  const actions = useMenuActions(workspace, pickFiles, pickFolder, printPane, setSettingsOpen);
+  useShortcuts(workspace, paneActions, actions, updateSettings, setSettingsOpen, setError);
 
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 

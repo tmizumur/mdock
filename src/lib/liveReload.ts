@@ -65,6 +65,11 @@ export function indexTree(tree: Entry[]): Map<string, Entry> {
   return m;
 }
 
+/** 新しく現れたパスで保存済みの内容が一致するか */
+export function isMoveMatch(previous: ReadonlyMap<string, Entry>, path: string, saved: string, text: string): boolean {
+  return !previous.has(pathKey(path)) && saved.trim() !== "" && text === saved;
+}
+
 /** 一度に部分的に読み直すフォルダの上限。これより多ければ全体を読み直す */
 const MAX_DIRS = 30;
 

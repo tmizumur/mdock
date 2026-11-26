@@ -6,12 +6,14 @@ import { type useUnsavedDialog } from "../components/Dialogs";
 import { parseFileError, readTextResult, writeText } from "../lib/api";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader } from "../lib/dnd";
 import { type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, setSizes, splitLeaf } from "../lib/layout";
+import { createOpenRequests } from "../lib/openRequests";
 import { type DiffSide, type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, newId, receiveDiffText, receiveDocText, tabTitle, textFormat } from "../lib/tabs";
 import { type Workspace, activeAfterRemove, allTabs, cloneTab, closeTabIn, dropIfEmpty, mapPanes, mapTabs, newPaneId, resetLayoutIn, toggleSplitIn } from "../lib/workspace";
 
 export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], setError: (error: string | null) => void) {
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
   const [activeIdx, setActiveIdx] = useState("p0");
+  const [openRequests] = useState(createOpenRequests);
   /** タブごとのスクロール位置（タブ ID → px） */
   const scrolls = useRef(new Map<string, number>());
 
@@ -78,33 +80,41 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         setError(null);
         return;
       }
-      if (has(wsRef.current.panes[livePane(paneId)]) < 0) {
+      const id = livePane(paneId);
+      const pane = wsRef.current.panes[id];
+      const previous = activeTab(pane)?.id;
+      const requestStatus = openRequests.start(id);
+      if (has(pane) < 0) {
         const tab = await read();
-        const id = livePane(paneId);
+        const status = requestStatus();
+        const latest = status === "latest";
+        const insert = opts.newTab || opts.at !== undefined;
+        if (status === "cleared" || (!latest && !insert) || !wsRef.current.panes[id]) return;
         updatePane(id, (p) => {
           const k = has(p);
-          if (k >= 0) return { ...p, active: k };
+          if (k >= 0) return latest ? { ...p, active: k } : p;
           const cur = p.tabs[p.active];
-          if (!opts.newTab && opts.at === undefined && cur?.kind === "doc" && !isDirty(cur)) {
+          if (!insert && cur?.kind === "doc" && cur.id === previous && !isDirty(cur)) {
             scrolls.current.delete(cur.id);
             return { ...p, tabs: p.tabs.map((t, i) => (i === p.active ? tab : t)) };
           }
           const at = Math.max(0, Math.min(opts.at ?? (p.tabs.length ? p.active + 1 : 0), p.tabs.length));
-          return { tabs: [...p.tabs.slice(0, at), tab, ...p.tabs.slice(at)], active: at };
+          // 遅れて届いた新しいタブは背面に追加する
+          const active = latest || !p.tabs.length ? at : p.active + (at <= p.active ? 1 : 0);
+          return { tabs: [...p.tabs.slice(0, at), tab, ...p.tabs.slice(at)], active };
         });
-        focusPane(id);
+        if (!latest) return;
       } else {
-        const id = livePane(paneId);
         updatePane(id, (p) => {
           const k = has(p);
           return { ...p, active: k, tabs: p.tabs.map((t, i) => (i === k && anchor && t.kind === "doc" ? { ...t, anchor } : t)) };
         });
-        focusPane(id);
       }
+      focusPane(id);
       setError(null);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [focusPane],
+    [focusPane, openRequests],
   );
 
   const retryRead = async (tabId: string, force: boolean, side?: DiffSide) => {
@@ -147,9 +157,10 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
 
   /** すべてのタブを閉じる（分割の形はそのまま） */
   const clearTabs = useCallback(() => {
+    openRequests.clear();
     apply((w) => mapPanes(w, () => emptyPane()));
     scrolls.current.clear();
-  }, [apply]);
+  }, [apply, openRequests]);
 
 
   const saving = useRef(new Set<string>());

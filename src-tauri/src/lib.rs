@@ -767,8 +767,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 .build(app)?,
         )
         .item(
-            &MenuItemBuilder::with_id("open-folder", "フォルダを開く…")
+            &MenuItemBuilder::with_id("open-file", "ファイルを開く…")
                 .accelerator("CmdOrCtrl+O")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open-folder", "フォルダを開く…")
+                .accelerator("CmdOrCtrl+Shift+O")
                 .build(app)?,
         )
         .separator()

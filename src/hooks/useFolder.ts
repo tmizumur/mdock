@@ -8,7 +8,7 @@ export function useFolder(
   { clearTabs, confirmDirty, wsRef }: Pick<ReturnType<typeof useWorkspace>, "clearTabs" | "confirmDirty" | "wsRef">,
   setError: (error: string | null) => void,
 ) {
-  const [root, setRoot] = useState<string | null>(null);
+  const [root, setRootState] = useState<string | null>(null);
   const [tree, setTreeState] = useState<Entry[]>([]);
   /** ツリーの最新の状態（非同期の部分更新で、古いツリーに上書きしないため） */
   const treeRef = useRef<Entry[]>([]);
@@ -16,8 +16,11 @@ export function useFolder(
     treeRef.current = t;
     setTreeState(t);
   }, []);
-  const rootRef = useRef(root);
-  rootRef.current = root;
+  const rootRef = useRef<string | null>(null);
+  const setRoot = useCallback((dir: string | null) => {
+    rootRef.current = dir;
+    setRootState(dir);
+  }, []);
 
   const [watchedRoot, setWatchedRoot] = useState<string | null>(null);
   const watchRequest = useRef(0);
@@ -43,7 +46,7 @@ export function useFolder(
     } catch (e) {
       setError(`フォルダを開けませんでした: ${e}`);
     }
-  }, [clearTabs, confirmDirty, setError, setTree, startWatchingFolder, wsRef]);
+  }, [clearTabs, confirmDirty, setError, setRoot, setTree, startWatchingFolder, wsRef]);
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false });

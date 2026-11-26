@@ -7,6 +7,7 @@ import { type useWorkspace } from "./useWorkspace";
 
 export function useMenuActions(
   { activeRef, wsRef, saveTab, closeActiveTab }: Pick<ReturnType<typeof useWorkspace>, "activeRef" | "wsRef" | "saveTab" | "closeActiveTab">,
+  pickFiles: () => Promise<void>,
   pickFolder: ReturnType<typeof useFolder>["pickFolder"],
   printPane: ReturnType<typeof usePaneActions>["printPane"],
   setSettingsOpen: (open: boolean) => void,
@@ -14,6 +15,7 @@ export function useMenuActions(
   // メニュー（⌘W・⌘O・⌘S など）から呼ばれる操作。最新の状態を使うため ref 経由で呼ぶ
   const actions = useRef<Record<string, () => void>>({});
   actions.current = {
+    "open-file": pickFiles,
     "open-folder": pickFolder,
     save: () => {
       const p = wsRef.current.panes[activeRef.current];
