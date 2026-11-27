@@ -15,7 +15,7 @@
         "title": "Mdock",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 15 },
+        "trafficLightPosition": { "x": 14, "y": 24 },
         "theme": "Dark",
         "backgroundColor": "#22262B",
         "width": 1280,
