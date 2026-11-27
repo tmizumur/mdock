@@ -148,13 +148,14 @@ pub(crate) fn search(
         .max_filesize(Some(MAX_BYTES))
         .filter_entry(|entry| {
             entry.depth() == 0
-                || !entry.file_type().is_some_and(|kind| {
-                    kind.is_dir()
-                        && entry
-                            .file_name()
-                            .to_str()
-                            .is_some_and(|name| SKIP_DIRS.contains(&name))
-                })
+                || (!text_file::is_save_temp(entry.file_name())
+                    && !entry.file_type().is_some_and(|kind| {
+                        kind.is_dir()
+                            && entry
+                                .file_name()
+                                .to_str()
+                                .is_some_and(|name| SKIP_DIRS.contains(&name))
+                    }))
         })
         .build_parallel()
         .run(|| {
@@ -266,6 +267,18 @@ mod tests {
             &AtomicU64::new(1),
             1,
         )
+    }
+
+    #[test]
+    fn skips_save_temporary_files() {
+        let dir = TempDir::new();
+        let root = &dir.0;
+        fs::write(root.join("note.md"), "hit").unwrap();
+        fs::write(root.join(".note.md.mdock-tmp-1f2e-18a3b-0"), "hit").unwrap();
+
+        let result = run(root, "hit", true, false, 5000).unwrap();
+        assert_eq!(result.count, 1);
+        assert_eq!(result.files[0].relative_path, "note.md");
     }
 
     #[test]

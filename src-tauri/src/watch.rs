@@ -6,6 +6,7 @@
 //! - 監視のエラー（フォルダが一旦消えた等）で止まったまま戻らなかった
 //! - 実体のパス（/private/var/...）で届くので、開いたときのパス（/var/...）と結び付かなかった
 
+use crate::text_file::is_save_temp;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -223,11 +224,12 @@ impl Inner {
                 *last = t;
             };
             match msg {
-                Ok(Msg::Fs(Ok(ev))) => {
-                    if ev.need_rescan() {
-                        rescan = true;
-                    }
-                    if !ev.paths.is_empty() || ev.need_rescan() {
+                Ok(Msg::Fs(Ok(mut ev))) => {
+                    let needs_rescan = ev.need_rescan();
+                    rescan |= needs_rescan;
+                    ev.paths
+                        .retain(|path| !path.file_name().is_some_and(is_save_temp));
+                    if !ev.paths.is_empty() || needs_rescan {
                         for p in ev.paths {
                             if pending.len() >= MAX_PATHS {
                                 rescan = true;
@@ -355,6 +357,32 @@ mod tests {
     const LIMIT: Duration = Duration::from_secs(3);
     /// 目標（変更から画面まで 200ms 以内）のうち、監視側で使ってよい時間
     const FAST: Duration = Duration::from_millis(400);
+
+    #[test]
+    fn save_notifies_target_without_temporary_paths() {
+        let tmp = Tmp::new("save");
+        let path = tmp.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+        let (_watch, rx) = start(Some(&tmp.0), vec![]);
+
+        crate::text_file::write(&path, "saved", None, false, None).unwrap();
+
+        let deadline = Instant::now() + LIMIT;
+        let mut saw_target = false;
+        while let Ok(batch) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            assert!(
+                !batch
+                    .paths
+                    .iter()
+                    .any(|p| p.file_name().is_some_and(is_save_temp))
+            );
+            saw_target |= batch.paths.contains(&path);
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+        assert!(saw_target);
+    }
 
     #[test]
     fn maps_real_paths_back() {
