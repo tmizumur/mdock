@@ -32,7 +32,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const workspace = useWorkspace(ask, setError);
+  const workspace = useWorkspace(ask, setError, settings.previewTabs);
   const {
     ws, wsRef, activeIdx, activeRef, order, scrolls, previewScrolls, focusPane, updatePane, updateActiveTab,
     openFile, retryRead, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
@@ -87,6 +87,7 @@ export default function App() {
       onFocus={() => activeRef.current !== i && focusPane(i)}
       onActivateTab={(k) => updatePane(i, (p) => ({ ...p, active: k }))}
       onCloseTab={(k) => closeTab(i, k)}
+      onPinTab={workspace.pin}
       onTabMenu={(k, x, y) => openTabMenu(i, k, x, y)}
       onChange={(content) => updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, content } : t))}
       onMode={(mode: ViewMode) => updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, mode } : t))}
@@ -109,7 +110,7 @@ export default function App() {
           ...(t.savedBom !== undefined ? { bom: t.bom, savedBom: t.external.bom === !!t.bom ? undefined : t.external.bom } : {}),
         };
       })}
-      onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab })}
+      onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab, preview: true })}
       onPrint={() => printPane(i)}
       printTarget={activeIdx === i}
     />
@@ -189,7 +190,7 @@ export default function App() {
                     entries={tree}
                     openPaths={visiblePaths}
                   activePath={currentTab?.kind === "doc" ? currentTab.path : undefined}
-                    onOpen={onTreeOpen}
+                    onOpen={(path, otherPane, newTab, action) => onTreeOpen(path, otherPane, newTab, undefined, action)}
                     onLoadDirectory={loadDirectory}
                     onChanged={refreshTree}
                     onRenamed={onRenamed}

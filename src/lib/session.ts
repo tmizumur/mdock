@@ -1,5 +1,23 @@
 import { loadSession, readTextResult } from "./api";
-import { type DiffTab, type DocTab, type PaneState, type SavedPane, type SavedTab, type Session, type Tab, defaultSession, emptyPane, migrateSession, newId, receiveDiffText, receiveDocText } from "./tabs";
+import { type DiffTab, type DocTab, type PaneState, type SavedPane, type SavedTab, type Session, type Tab, defaultSession, emptyPane, isDirty, migrateSession, newId, receiveDiffText, receiveDocText, settlePanePreviews } from "./tabs";
+
+export function saveTabState(t: Tab, scroll: number): SavedTab {
+  if (t.kind === "diff") {
+    const left = t.reads?.left?.force;
+    const right = t.reads?.right?.force;
+    return { kind: "diff", left: t.left, right: t.right, scroll, force: left || right ? { left, right } : undefined };
+  }
+  return {
+    path: t.path,
+    mode: t.mode,
+    scroll,
+    encoding: t.encoding,
+    bom: t.bom ?? false,
+    force: t.force,
+    ...(t.preview ? { preview: true } : {}),
+    ...(isDirty(t) ? { draft: t.content, draftBase: t.saved, savedBom: t.savedBom } : {}),
+  };
+}
 
 /** 保存しておいた状態を読む。壊れていたら初期状態から始める。 */
 export async function restoreSession(): Promise<Session> {
@@ -44,6 +62,7 @@ async function restoreTab(t: SavedTab, scrolls: Map<string, number>): Promise<Ta
   const tab: DocTab = {
     id, kind: "doc", path: t.path, content: draft ?? saved, saved, mode: t.mode ?? "view",
     encoding: t.encoding, bom, savedBom, force, readError: error,
+    ...(t.preview === true ? { preview: true } : {}),
   };
   return info ? receiveDocText(tab, info) : tab;
 }
@@ -54,5 +73,5 @@ export async function restorePane(p: SavedPane | undefined, scrolls: Map<string,
   // 壊れたタブの情報を除き、選んでいたタブの位置を合わせる。
   const keptBefore = results.slice(0, p.active).filter(Boolean).length;
   const tabs = results.filter((t): t is Tab => !!t);
-  return { tabs, active: Math.min(keptBefore, Math.max(0, tabs.length - 1)) };
+  return settlePanePreviews({ tabs, active: Math.min(keptBefore, Math.max(0, tabs.length - 1)) });
 }

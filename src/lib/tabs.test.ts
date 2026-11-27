@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { type Session, migrateSession } from "./tabs";
+import { type DocTab, type Session, isPreview, migrateSession, settlePanePreviews, settlePreview } from "./tabs";
+
+describe("仮のタブ", () => {
+  const tab: DocTab = { id: "a", kind: "doc", path: "/a.md", content: "本文", saved: "本文", mode: "view", preview: true };
+
+  it("表示専用のタブを残し、編集モードや未保存の変更があるタブは固定する", () => {
+    expect(settlePreview(tab)).toBe(tab);
+    expect(isPreview(settlePreview({ ...tab, mode: "edit" }))).toBe(false);
+    expect(isPreview(settlePreview({ ...tab, mode: "split" }))).toBe(false);
+    expect(isPreview(settlePreview({ ...tab, content: "編集中" }))).toBe(false);
+    expect(isPreview(settlePreview({ ...tab, bom: true, savedBom: false }))).toBe(false);
+  });
+
+  it("ペインの最後の仮のタブだけを残し、選択位置を保つ", () => {
+    const tabs = [tab, { ...tab, id: "b" }, { ...tab, id: "c", mode: "edit" as const }];
+    const pane = settlePanePreviews({ tabs, active: 0 });
+    expect(pane.tabs.map(isPreview)).toEqual([false, true, false]);
+    expect(pane.active).toBe(0);
+    expect(settlePanePreviews(pane)).toBe(pane);
+  });
+});
 
 describe("セッションの移行", () => {
   it("初期形式のパスから単一ペインのタブを復元する", () => {

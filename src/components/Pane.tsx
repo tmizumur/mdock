@@ -35,6 +35,7 @@ type Props = {
   onFocus: () => void;
   onActivateTab: (i: number) => void;
   onCloseTab: (i: number) => void;
+  onPinTab: (tabId: string) => void;
   onTabMenu: (i: number, x: number, y: number) => void;
   onChange: (content: string) => void;
   onMode: (mode: ViewMode) => void;
@@ -116,6 +117,7 @@ export default function Pane(props: Props) {
         pane={pane}
         onActivate={props.onActivateTab}
         onClose={props.onCloseTab}
+        onPin={props.onPinTab}
         onContextMenu={props.onTabMenu}
         actions={doc && !doc.readError && (
           <div className="segmented pane-modes" role="group" aria-label="表示モード">

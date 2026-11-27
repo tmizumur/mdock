@@ -31,6 +31,7 @@ const SHORTCUTS: [string, string][] = [
   ["⌘ +  /  ⌘ −  /  ⌘ 0", "文字を大きく / 小さく / 標準に"],
   ["⌘ クリック", "ツリーのファイルを隣のペインで開く"],
   ["⌥ クリック", "ツリーのファイルを新しいタブで開く"],
+  ["ダブルクリック", "仮のタブを固定する"],
   ["↑ ↓ ← → / Enter", "ツリーの移動・開閉・開く"],
   ["⌘ ⌫", "ツリーで選んだものをゴミ箱に入れる"],
 ];
@@ -172,6 +173,11 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "files" && (
             <>
+              <Toggle
+                k="previewTabs"
+                label="仮のタブを使う"
+                note="ツリーで1回クリックしたファイルを仮のタブで開き、次に開くファイルで置き換えます。ダブルクリックや編集で固定します"
+              />
               <Toggle
                 k="gitStatus"
                 label="ツリーに Git の変更状態を表示"

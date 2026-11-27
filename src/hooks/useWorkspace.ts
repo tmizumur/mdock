@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { type Layout } from "react-resizable-panels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask as askDialog } from "@tauri-apps/plugin-dialog";
@@ -9,13 +9,18 @@ import { type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, setSizes
 import type { SearchLocation } from "../lib/folderSearch";
 import { type NavLocation, type NavState, emptyNav, goBack, goForward, recordNav } from "../lib/navHistory";
 import { createOpenRequests } from "../lib/openRequests";
-import { type DiffSide, type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, newId, receiveDiffText, receiveDocText, tabTitle, textFormat } from "../lib/tabs";
+import { type DiffSide, type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, isPreview, newId, pinTab, receiveDiffText, receiveDocText, settlePanePreviews, tabTitle, textFormat } from "../lib/tabs";
 import { type Workspace, activeAfterRemove, allTabs, cloneTab, closeTabIn, dropIfEmpty, mapPanes, mapTabs, newPaneId, resetLayoutIn, toggleSplitIn } from "../lib/workspace";
 
-export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], setError: (error: string | null) => void) {
+type TreeClick = { path: string; pin: boolean; tabId?: string };
+
+export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], setError: (error: string | null) => void, previewTabs = true) {
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
   const [activeIdx, setActiveIdx] = useState("p0");
   const [openRequests] = useState(createOpenRequests);
+  const previewEnabled = useRef(previewTabs);
+  // 2 回目のクリックは、1 回目が開くタブ（分割先も含む）を固定する。
+  const treeClick = useRef<TreeClick | null>(null);
   const lineNonce = useRef(0);
   const scrollNonce = useRef(0);
   /** タブごとのスクロール位置（タブ ID → px） */
@@ -34,11 +39,19 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   // （非同期の処理が続けて変更しても、古い状態で上書きしないように）
   const wsRef = useRef(ws);
   const apply = useCallback((fn: (w: Workspace) => Workspace) => {
-    const next = fn(wsRef.current);
+    let next = fn(wsRef.current);
+    for (const [id, pane] of Object.entries(next.panes)) {
+      const settled = settlePanePreviews(pane, previewEnabled.current);
+      if (settled !== pane) next = { ...next, panes: { ...next.panes, [id]: settled } };
+    }
     if (next === wsRef.current) return;
     wsRef.current = next;
     setWs(next);
   }, []);
+  useLayoutEffect(() => {
+    previewEnabled.current = previewTabs;
+    if (!previewTabs) apply((w) => w);
+  }, [apply, previewTabs]);
   const activeRef = useRef(activeIdx);
 
   const order = leaves(ws.layout);
@@ -103,15 +116,15 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
 
   /**
    * ファイルを開く。既にそのペインで開いていればそのタブへ。
-   * そうでなければ今のタブで開く（未保存の変更がある・差分・newTab のときは新しいタブ）。
+   * 仮のタブで開くときは、同じペインの仮のタブを置き換える。
    * split を指定すると、そのペインの横（上下）に新しいペインを作って開く。at はタブを入れる位置。
    */
   const openFile = useCallback(
     async (path: string, paneId: string, opts: {
-      newTab?: boolean; anchor?: string; line?: Omit<SearchLocation, "nonce">; split?: Side; at?: number;
+      newTab?: boolean; preview?: boolean; anchor?: string; line?: Omit<SearchLocation, "nonce">; split?: Side; at?: number;
       /** 戻る／進むで復元する位置 */
       restore?: { target: NavLocation; state: NavState };
-    } = {}) => {
+    } = {}, click?: TreeClick) => {
       const anchor = opts.anchor ? { id: opts.anchor, nonce: Date.now() } : undefined;
       const line = opts.line ? { ...opts.line, nonce: ++lineNonce.current } : undefined;
       const scrollTo = opts.restore && { top: opts.restore.target.scroll, nonce: ++scrollNonce.current };
@@ -121,12 +134,19 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         if (t.mode === "split") previewScrolls.current.set(t.id, scrollTo.top);
         return { ...t, scrollTo: t.mode === "edit" ? undefined : scrollTo };
       };
-      const withLocation = (p: PaneState, k: number) => ({
-        ...p, active: k,
-        tabs: anchor || line || scrollTo
-          ? p.tabs.map((t, i) => (i === k && t.kind === "doc" ? withScroll({ ...t, anchor, line, scrollTo: undefined }) : t))
-          : p.tabs,
-      });
+      const withLocation = (p: PaneState, k: number) => {
+        if (click) click.tabId = p.tabs[k].id;
+        return {
+          ...p, active: k,
+          tabs: anchor || line || scrollTo || click?.pin
+            ? p.tabs.map((t, i) => {
+              if (i !== k || t.kind !== "doc") return t;
+              const tab = anchor || line || scrollTo ? withScroll({ ...t, anchor, line, scrollTo: undefined }) : t;
+              return click?.pin ? pinTab(tab) : tab;
+            })
+            : p.tabs,
+        };
+      };
       const has = (p: PaneState) => {
         const original = opts.restore?.target.tabId;
         const k = original ? p.tabs.findIndex((t) => t.kind === "doc" && t.id === original) : -1;
@@ -145,10 +165,17 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
       };
       const id = livePane(paneId);
       const requestStatus = openRequests.start(id);
+      const insert = opts.newTab || opts.at !== undefined;
+      const preview = previewEnabled.current && opts.preview && !insert && !opts.restore;
+      const asPreview = () => !!preview && previewEnabled.current;
+      const withPreview = (tab: DocTab): DocTab => {
+        if (click) click.tabId = tab.id;
+        return asPreview() && !click?.pin ? { ...tab, preview: true } : tab;
+      };
       if (opts.split) {
         const tab = await read();
         if (requestStatus() !== "latest" || !wsRef.current.panes[id]) return;
-        splitWith(id, opts.split, [tab]);
+        splitWith(id, opts.split, [withPreview(tab)]);
         setError(null);
         return;
       }
@@ -162,18 +189,19 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         const loaded = await read();
         const status = requestStatus();
         const latest = status === "latest";
-        const insert = opts.newTab || opts.at !== undefined;
         if (status === "cleared" || (!latest && !insert) || !wsRef.current.panes[id]) return;
         if (opts.restore && nav.current.get(id) !== history) return;
         if (shouldRecord && latest) from = navLocation(id);
         updatePane(id, (p) => {
           const k = has(p);
           if (k >= 0) return latest ? withLocation(p, k) : p;
-          const tab = withScroll(loaded);
+          const tab = withPreview(withScroll(loaded));
           const cur = p.tabs[p.active];
-          if (!insert && cur?.kind === "doc" && cur.id === previous && !isDirty(cur)) {
-            forgetScroll(cur.id);
-            return { ...p, tabs: p.tabs.map((t, i) => (i === p.active ? tab : t)) };
+          const replace = asPreview() ? p.tabs.findIndex(isPreview)
+            : !insert && cur?.kind === "doc" && cur.id === previous && !isDirty(cur) ? p.active : -1;
+          if (replace >= 0) {
+            forgetScroll(p.tabs[replace].id);
+            return { tabs: p.tabs.map((t, i) => (i === replace ? tab : t)), active: replace };
           }
           const at = Math.max(0, Math.min(opts.at ?? (p.tabs.length ? p.active + 1 : 0), p.tabs.length));
           // 遅れて届いた新しいタブは背面に追加する
@@ -237,6 +265,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   /** すべてのタブを閉じる（分割の形はそのまま） */
   const clearTabs = useCallback(() => {
     openRequests.clear();
+    treeClick.current = null;
     nav.current.clear();
     navigating.current = new Set();
     apply((w) => mapPanes(w, () => emptyPane()));
@@ -367,6 +396,8 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     updatePane(paneId, (q) => ({ tabs: q.tabs.filter((t) => t.id === keep.id), active: 0 }));
   };
 
+  const pin = (tabId: string) => apply((w) => mapTabs(w, (t) => t.id === tabId ? pinTab(t) : t));
+
   /**
    * タブを移動する（同じペイン内の並べ替え、ほかのペインへ、または新しいペインに分割して）。
    * 元のペインが空になったら、そのペインは消える。
@@ -377,7 +408,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
       const src = w.panes[fromPane];
       const k = src?.tabs.findIndex((t) => t.id === tabId) ?? -1;
       if (k < 0 || (!to.split && !w.panes[to.paneId])) return w;
-      const tab = src.tabs[k];
+      const tab = pinTab(src.tabs[k]);
       // 同じペインで、タブが 1 つしかないなら分割しない
       if (to.split && fromPane === to.paneId && src.tabs.length <= 1) return w;
       let layout = w.layout;
@@ -407,7 +438,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   /** タブを複製して、そのペインの side 側の新しいペインに開く（⌘\ ・「右に分割」） */
   const splitTab = (paneId: string, side: Side) => {
     const t = activeTab(wsRef.current.panes[paneId] ?? emptyPane());
-    const copy = t ? cloneTab(t) : null;
+    const copy = t ? pinTab(cloneTab(t)) : null;
     if (copy && t) scrolls.current.set(copy.id, scrolls.current.get(t.id) ?? 0);
     splitWith(paneId, side, copy ? [copy] : []);
   };
@@ -471,14 +502,24 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     );
   };
 
-  /** ツリーのクリック: 今のペインのタブで開く。⌘+クリックは隣のペイン（1 ペインなら右に分割）、⌥+クリックは新しいタブ */
-  const onTreeOpen = (path: string, otherPaneClick: boolean, newTab: boolean, line?: Omit<SearchLocation, "nonce">) => {
-    const cur = livePane(activeRef.current);
-    if (!otherPaneClick) openFile(path, cur, { newTab, line });
-    else {
-      const op = otherPane(cur);
-      openFile(path, op ?? cur, op ? { newTab, line } : { split: "right", line });
+  /** ツリーのクリック: ⌘ は隣のペイン（1 ペインなら右に分割）、⌥ は固定した新しいタブ */
+  const onTreeOpen = (path: string, otherPaneClick: boolean, newTab: boolean, line?: Omit<SearchLocation, "nonce">, action?: "pin" | "create") => {
+    if (action === "pin") {
+      const click = treeClick.current;
+      if (click?.path === path) {
+        click.pin = true;
+        if (click.tabId) pin(click.tabId);
+      }
+      return;
     }
+    const click = { path, pin: false };
+    treeClick.current = click;
+    const cur = livePane(activeRef.current);
+    const dest = otherPaneClick ? otherPane(cur) : cur;
+    return openFile(path, dest ?? cur, {
+      newTab: newTab || (action === "create" && previewEnabled.current),
+      preview: action !== "create", line, split: dest === null ? "right" : undefined,
+    }, click);
   };
 
   /** 分割の境界をドラッグして比率が変わったら、ツリーに書き戻す */
@@ -495,7 +536,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   return {
     ws, wsRef, apply, activeIdx, activeRef, order, scrolls, previewScrolls, focusPane, livePane,
     updatePane, updateActiveTab, openFile, retryRead, confirmDirty, clearTabs, saveTab,
-    closeTab, closeActiveTab, closeOthers, moveTab, splitTab, splitWith, cycleTab, navigate, recordJump,
+    closeTab, closeActiveTab, closeOthers, pin, moveTab, splitTab, splitWith, cycleTab, navigate, recordJump,
     otherPane, compareWithOther, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
   };
 }

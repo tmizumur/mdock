@@ -491,6 +491,8 @@ button.outline-toggle:hover { color: var(--fg); }
   from { opacity: 0.65; }
 }
 .tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 斜体の字の右端が切れないように少し空ける */
+.tab.preview .tab-name { font-style: italic; padding-right: 0.15em; }
 .tab-close {
   display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
   flex-shrink: 0; border: none; background: none; border-radius: var(--radius-small); padding: 0; color: var(--fg-muted); font-size: 14px; line-height: 1;
