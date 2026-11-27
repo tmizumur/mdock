@@ -13,9 +13,19 @@ const READ_LIMIT: u64 = 5 * 1024 * 1024;
 const FORCE_LIMIT: u64 = 100 * 1024 * 1024;
 const SAVE_TEMP_MARKER: &str = ".mdock-tmp-";
 
+/// 保存用の一時ファイル（.<名前>.mdock-tmp-<16進>-<16進>-<16進>）か
 pub(crate) fn is_save_temp(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
-    name.starts_with('.') && name.contains(SAVE_TEMP_MARKER)
+    let Some(at) = name.rfind(SAVE_TEMP_MARKER) else {
+        return false;
+    };
+    let parts: Vec<&str> = name[at + SAVE_TEMP_MARKER.len()..].split('-').collect();
+    name.starts_with('.')
+        && at > 1
+        && parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 #[derive(Debug, Serialize)]
@@ -404,7 +414,7 @@ fn replace_with(
                     return overwrite(file, bytes, write);
                 }
             }
-            Some(metadata)
+            Some((metadata, file))
         }
         None => None,
     };
@@ -420,15 +430,20 @@ fn replace_with(
     let (mut temp, mut file) = match create_save_temp(target, &options) {
         Ok(created) => created,
         // フォルダに書き込めない（ファイル自体には書ける）ときは、従来どおり直接上書きする。
+        // 確認済みのハンドルをそのまま使う（開き直すと、その間の差し替えに気づけない）。
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied && original.is_some() => {
-            return overwrite(open_for_overwrite(target)?, bytes, write);
+            let (_, original_file) = original.expect("original");
+            return overwrite(original_file, bytes, write);
         }
         Err(error) => return Err(error.into()),
     };
+    if let Some((_, original_file)) = &original {
+        copy_extra_metadata(original_file, &file);
+    }
     write(&mut file, bytes)?;
     file.sync_all()?;
     #[cfg(unix)]
-    if let Some(metadata) = &original {
+    if let Some((metadata, _)) = &original {
         file.set_permissions(metadata.permissions())?;
     }
     let stamp = DiskStamp::from_metadata(&file.metadata()?)?;
@@ -436,9 +451,12 @@ fn replace_with(
 
     let mut linked = false;
     if let Some(expected) = expected {
-        if original.is_some() {
+        if let Some((metadata, _)) = &original {
             let current = save_metadata(target)?.ok_or_else(changed_on_disk)?;
-            if !current.is_file() || DiskStamp::from_metadata(&current)? != expected {
+            if !current.is_file()
+                || DiskStamp::from_metadata(&current)? != expected
+                || !same_file(&current, metadata)
+            {
                 return Err(changed_on_disk());
             }
         } else {
@@ -463,6 +481,47 @@ fn replace_with(
         .unwrap_or_else(|| Path::new("."));
     let _ = File::open(parent).and_then(|dir| dir.sync_all());
     Ok(stamp)
+}
+
+/// 確認したときと同じファイル（inode）か
+fn same_file(a: &Metadata, b: &Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.dev() == b.dev() && a.ino() == b.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        true
+    }
+}
+
+/// 権限以外の付随情報（所有者・グループ、macOS では ACL と拡張属性＝Finder のタグなど）を
+/// できるだけ引き継ぐ。失敗しても保存は続ける。
+fn copy_extra_metadata(original: &File, temp: &File) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(metadata) = original.metadata() {
+            let _ = std::os::unix::fs::fchown(temp, Some(metadata.uid()), Some(metadata.gid()));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        // COPYFILE_STAT は更新時刻まで写すので使わない。
+        unsafe {
+            libc::fcopyfile(
+                original.as_raw_fd(),
+                temp.as_raw_fd(),
+                std::ptr::null_mut(),
+                libc::COPYFILE_ACL | libc::COPYFILE_XATTR,
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (original, temp);
 }
 
 fn open_for_overwrite(path: &Path) -> io::Result<File> {
@@ -681,11 +740,64 @@ pub(crate) mod tests {
         let path = sub.join("note.md");
         fs::write(&path, "original").unwrap();
         fs::set_permissions(&sub, fs::Permissions::from_mode(0o555)).unwrap();
+        let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap());
         let result = write(&path, "saved", None, false, None);
         fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
         result.unwrap();
+        // 置き換えではなく、同じファイルへの上書き
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap()),
+            inode
+        );
         assert_eq!(fs::read(&path).unwrap(), b"saved");
         assert_no_save_temps(&sub);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keeps_extended_attributes() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+        let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let name = CString::new("com.mdock.test").unwrap();
+        let value = b"tag";
+        let get = || {
+            let mut buf = [0u8; 16];
+            let n = unsafe {
+                libc::getxattr(
+                    c_path.as_ptr(),
+                    name.as_ptr(),
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                    0,
+                    0,
+                )
+            };
+            (n >= 0).then(|| buf[..n as usize].to_vec())
+        };
+        let set = unsafe {
+            libc::setxattr(
+                c_path.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert_eq!(set, 0);
+
+        let stamp = write(&path, "saved", None, false, None).unwrap();
+
+        assert_eq!(get().as_deref(), Some(&value[..]));
+        assert_eq!(
+            stamp,
+            DiskStamp::from_metadata(&fs::metadata(&path).unwrap()).unwrap()
+        );
     }
 
     #[cfg(unix)]
@@ -706,8 +818,10 @@ pub(crate) mod tests {
 
     #[test]
     fn identifies_save_temporary_names() {
-        assert!(is_save_temp(OsStr::new(".note.md.mdock-tmp-123a")));
-        assert!(!is_save_temp(OsStr::new("note.md.mdock-tmp-123a")));
+        assert!(is_save_temp(OsStr::new(".note.md.mdock-tmp-1f2e-18a3b-0")));
+        assert!(!is_save_temp(OsStr::new("note.md.mdock-tmp-1f2e-18a3b-0")));
+        assert!(!is_save_temp(OsStr::new(".notes.mdock-tmp-backup")));
+        assert!(!is_save_temp(OsStr::new(".note.md.mdock-tmp-123a")));
         assert!(!is_save_temp(OsStr::new(".note.md.tmp-123a")));
         assert!(!is_save_temp(OsStr::new(".mdock-tmp")));
     }

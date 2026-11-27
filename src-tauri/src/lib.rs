@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn walk_skips_save_temporary_files() {
         let root = super::text_file::tests::TempDir::new();
-        fs::write(root.0.join(".note.md.mdock-tmp-abcd"), "").unwrap();
+        fs::write(root.0.join(".note.md.mdock-tmp-1f2e-18a3b-0"), "").unwrap();
         fs::write(root.0.join("note.md"), "").unwrap();
 
         let entries = walk(&root.0, 0);

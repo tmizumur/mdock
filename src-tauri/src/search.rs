@@ -270,6 +270,18 @@ mod tests {
     }
 
     #[test]
+    fn skips_save_temporary_files() {
+        let dir = TempDir::new();
+        let root = &dir.0;
+        fs::write(root.join("note.md"), "hit").unwrap();
+        fs::write(root.join(".note.md.mdock-tmp-1f2e-18a3b-0"), "hit").unwrap();
+
+        let result = run(root, "hit", true, false, 5000).unwrap();
+        assert_eq!(result.count, 1);
+        assert_eq!(result.files[0].relative_path, "note.md");
+    }
+
+    #[test]
     fn respects_workspace_ignores_and_skips_binary_large_and_symlink_files() {
         let dir = TempDir::new();
         let root = &dir.0;
