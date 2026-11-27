@@ -1,4 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { slug } from "github-slugger";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -14,7 +15,9 @@ import {
 import { confirmOpenUrl, copyText, safeDecode, statPaths } from "../lib/api";
 import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find";
 import { classifyLink, localLinkAction } from "../lib/links";
+import { FILES_CHANGED, pathKey } from "../lib/liveReload";
 import { useSettings } from "../lib/settings";
+import Lightbox, { type LightboxMedia } from "./Lightbox";
 
 export type FindQuery = { query: string; index: number };
 /** 検索結果。tops は一致箇所の位置（本文の先頭からの px。読んでいる位置の帯に印を付ける） */
@@ -30,6 +33,7 @@ type Props = {
   onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンク） */
   anchor?: { id: string; nonce: number };
+  onAnchorScrolled?: () => void;
   find?: FindQuery;
   onFindResult?: (r: FindResult) => void;
   /** 描画し直したとき（見出しの位置などが変わったとき）に呼ぶ */
@@ -60,21 +64,111 @@ function useSettledContent(path: string, content: string, immediate: boolean) {
 
 /** 見出しの id から要素を探す（エンコードの違いを吸収） */
 function findAnchor(root: HTMLElement, raw: string): HTMLElement | null {
+  if (!raw) return null;
   const decoded = safeDecode(raw);
-  const cands = [raw, decoded, encodeURIComponent(decoded), encodeURIComponent(decoded.trim().toLowerCase().replace(/\s+/g, "-"))];
-  for (const c of cands) {
+  for (const c of new Set([raw, decoded, encodeURIComponent(decoded)])) {
     const el = root.querySelector<HTMLElement>(`[id="${CSS.escape(c)}"], a[name="${CSS.escape(c)}"]`);
     if (el) return el;
   }
-  return null;
+  const legacy = CSS.escape(decoded.trim().toLowerCase().replace(/\s+/g, "-"));
+  const github = CSS.escape(slug(decoded));
+  return root.querySelector<HTMLElement>(`[data-legacy-anchor="${legacy}"]`) ??
+    root.querySelector<HTMLElement>(`[id="${github}"]`);
+}
+
+// タブや表示モードを切り替えても、同じリンクの要求には戻らない。
+const handledAnchors = new WeakSet<NonNullable<Props["anchor"]>>();
+
+const localImageUrl = /^asset:\/\/localhost\/([^?#]+)/i;
+const lightboxTrigger = "img:not(a img), .mermaid-block svg:not(svg svg, a svg)";
+
+// プレビューを閉じている間も、変更されたパスの更新番号を覚えておく。
+const imageVersions = new Map<string, number>();
+const imageRefreshers = new Set<() => void>();
+let imageVersion = 0;
+let imageRescanVersion = 0;
+
+function onFilesChanged({ detail }: WindowEventMap[typeof FILES_CHANGED]) {
+  imageVersion = Math.max(Date.now(), imageVersion + 1);
+  if (detail.rescan) {
+    imageVersions.clear();
+    imageRescanVersion = imageVersion;
+  } else {
+    for (const path of detail.paths) imageVersions.set(pathKey(path), imageVersion);
+  }
+  for (const refresh of imageRefreshers) refresh();
+}
+
+window.addEventListener(FILES_CHANGED, onFilesChanged);
+import.meta.hot?.dispose(() => window.removeEventListener(FILES_CHANGED, onFilesChanged));
+
+function versionForImage(key: string) {
+  let version = imageRescanVersion;
+  while (key) {
+    version = Math.max(version, imageVersions.get(key) ?? 0);
+    const slash = key.lastIndexOf("/");
+    if (slash < 1) break;
+    key = key.slice(0, slash);
+  }
+  return version;
+}
+
+function prepareLightboxTriggers(root: HTMLElement) {
+  for (const image of root.querySelectorAll(lightboxTrigger)) {
+    image.setAttribute("tabindex", "0");
+    image.setAttribute("role", "button");
+    if (!image.getAttribute("alt") && !image.hasAttribute("aria-label") && !image.hasAttribute("aria-labelledby")) {
+      image.setAttribute("aria-label", image instanceof HTMLImageElement ? "画像を拡大" : "Mermaid 図を拡大");
+    }
+  }
+}
+
+function lightboxMedia(image: HTMLImageElement | SVGSVGElement, animations: boolean): LightboxMedia {
+  const bounds = image.getBoundingClientRect();
+  if (image instanceof HTMLImageElement) {
+    return {
+      src: image.currentSrc || image.src,
+      alt: image.alt,
+      width: image.naturalWidth || bounds.width || 1,
+      height: image.naturalHeight || bounds.height || 1,
+    };
+  }
+
+  // 画像として読み込み、図内の id と参照を元の図から隔離する。
+  const svg = image.cloneNode(true) as SVGSVGElement;
+  const width = image.viewBox?.baseVal.width || bounds.width || 1;
+  const height = image.viewBox?.baseVal.height || bounds.height || 1;
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height));
+  svg.style.removeProperty("max-width");
+  const pageRef = `${document.URL.split("#")[0]}#`;
+  for (const element of [svg, ...svg.querySelectorAll("*")]) {
+    for (const attribute of element.attributes) {
+      if (attribute.value.includes(pageRef)) attribute.value = attribute.value.split(pageRef).join("#");
+    }
+  }
+  const motion = document.createElementNS(svg.namespaceURI, "style");
+  const noMotion = "*, *::before, *::after { animation: none !important; transition: none !important; }";
+  motion.textContent = animations ? `@media (prefers-reduced-motion: reduce) { ${noMotion} }` : noMotion;
+  svg.append(motion);
+  const xml = new XMLSerializer().serializeToString(svg);
+  return {
+    src: `data:image/svg+xml,${encodeURIComponent(xml)}`,
+    alt: image.querySelector("title")?.textContent || "Mermaid 図",
+    width,
+    height,
+  };
 }
 
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */
-function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFindResult, onRendered, immediate = false }: Props) {
+function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, find, onFindResult, onRendered, immediate = false }: Props) {
   const ref = useRef<HTMLElement>(null);
+  const lastAnchorNonce = useRef<number>(undefined);
   const { settings } = useSettings();
   const source = useSettledContent(path, content, immediate);
   const [mathOn, setMathOn] = useState(mathReady());
+  const [lightbox, setLightbox] = useState<LightboxMedia | null>(null);
+  const closeLightbox = useCallback(() => setLightbox(null), []);
   // 描き直した回数（DOM が変わったら検索や見出し位置を計算し直す）
   const [domVersion, setDomVersion] = useState(0);
 
@@ -85,16 +179,34 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const html = useMemo(() => renderMarkdown(source, path), [source, path, mathOn]);
+  const innerHTML = useMemo(() => ({ __html: html }), [html]);
 
   // 描画後: 生 HTML の相対パス画像を直し、コード・図は見えたときに描く
   useLayoutEffect(() => {
     const root = ref.current;
     if (!root) return;
-    for (const img of root.querySelectorAll<HTMLImageElement>("img:not([data-local])")) {
+    prepareLightboxTriggers(root);
+    const images: { img: HTMLImageElement; key: string; url: string }[] = [];
+    for (const img of root.querySelectorAll<HTMLImageElement>("img")) {
       const src = img.getAttribute("src") ?? "";
-      if (isRelative(src)) img.src = localSrc(path, src);
-      img.dataset.local = "1";
+      if (!img.hasAttribute("data-local") && (isRelative(src) || /^\/(?!\/)/.test(src))) {
+        img.src = localSrc(path, src);
+        img.dataset.local = "1";
+      }
+      const asset = img.dataset.local === "1" && localImageUrl.exec(img.getAttribute("src") ?? "");
+      if (!asset) continue;
+      images.push({ img, key: pathKey(safeDecode(asset[1])), url: asset[0] });
     }
+    const refreshImages = () => {
+      for (const { img, key, url } of images) {
+        const version = versionForImage(key);
+        if (!version) continue;
+        const src = `${url}?v=${version}`;
+        if (img.getAttribute("src") !== src) img.src = src;
+      }
+    };
+    refreshImages();
+    if (images.length) imageRefreshers.add(refreshImages);
     setDomVersion((v) => v + 1);
     onRendered?.();
 
@@ -104,8 +216,10 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
           if (!e.isIntersecting) continue;
           const el = e.target as HTMLElement;
           io.unobserve(el);
-          const done = el.classList.contains("mermaid-block") ? renderMermaidBlock(el) : highlightBlock(el);
+          const isMermaid = el.classList.contains("mermaid-block");
+          const done = isMermaid ? renderMermaidBlock(el) : highlightBlock(el);
           done.then(() => {
+            if (isMermaid) prepareLightboxTriggers(el);
             setDomVersion((v) => v + 1);
             onRendered?.();
           });
@@ -121,15 +235,21 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
     return () => {
       io.disconnect();
       root.removeEventListener("load", onLoad, true);
+      imageRefreshers.delete(refreshImages);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html]);
+  }, [html, path]);
 
   // 別ファイルの見出しへのリンクで開いたとき、その見出しへ移動
   useEffect(() => {
-    if (!anchor || !ref.current) return;
-    findAnchor(ref.current, anchor.id)?.scrollIntoView({ block: "start" });
-  }, [anchor?.nonce, html]);
+    if (!anchor || lastAnchorNonce.current === anchor.nonce || handledAnchors.has(anchor) || !ref.current) return;
+    const target = findAnchor(ref.current, anchor.id);
+    if (!target) return;
+    lastAnchorNonce.current = anchor.nonce;
+    handledAnchors.add(anchor);
+    target.scrollIntoView({ block: "start" });
+    onAnchorScrolled?.();
+  }, [anchor, html, onAnchorScrolled]);
 
   // ファイル内検索
   const query = find?.query ?? "";
@@ -160,8 +280,18 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
   }, [query, find?.index]);
   useEffect(() => () => clearFindHighlights(id), [id]);
 
+  const openLightbox = (target: Element) => {
+    const image = target.closest<HTMLImageElement | SVGSVGElement>(lightboxTrigger);
+    if (!image) return false;
+    const media = lightboxMedia(image, settings.animations);
+    if (!media.src) return false;
+    image.focus({ preventScroll: true });
+    setLightbox(media);
+    return true;
+  };
+
   const onClick = async (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
+    const target = e.target as Element;
     const btn = target.closest<HTMLButtonElement>("button.copy-btn");
     if (btn) {
       e.preventDefault();
@@ -177,7 +307,10 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
       return;
     }
     const a = target.closest("a, area");
-    if (!a) return;
+    if (!a) {
+      if (openLightbox(target)) e.preventDefault();
+      return;
+    }
     const href = a.getAttribute("href");
     if (href === null) return;
     e.preventDefault();
@@ -208,15 +341,22 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, find, onFind
   };
 
   return (
-    <article
-      className={`markdown-body width-${settings.width} ${settings.wrap ? "wrap-code" : ""}`}
-      ref={ref}
-      onClick={onClick}
-      onAuxClick={(e) => {
-        if ((e.target as Element).closest("a, area")) e.preventDefault();
-      }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <>
+      <article
+        className={`markdown-body width-${settings.width} ${settings.wrap ? "wrap-code" : ""}`}
+        ref={ref}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.repeat || e.metaKey || e.ctrlKey || (e.key !== "Enter" && e.key !== " ")) return;
+          if (openLightbox(e.target as Element)) e.preventDefault();
+        }}
+        onAuxClick={(e) => {
+          if ((e.target as Element).closest("a, area")) e.preventDefault();
+        }}
+        dangerouslySetInnerHTML={innerHTML}
+      />
+      {lightbox && <Lightbox media={lightbox} onClose={closeLightbox} />}
+    </>
   );
 }
 

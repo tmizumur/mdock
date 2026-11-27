@@ -5,6 +5,14 @@ import { type Entry, type Stat, norm } from "./api";
 /** watcher から届く変更 */
 export type FsChange = { paths: string[]; rescan: boolean };
 
+export const FILES_CHANGED = "mdock:files-changed";
+
+declare global {
+  interface WindowEventMap {
+    [FILES_CHANGED]: CustomEvent<FsChange>;
+  }
+}
+
 /** パスの比較用の形（macOS は大文字小文字を区別しないので小文字にそろえる） */
 export const pathKey = (p: string) => norm(p).replace(/\/+$/, "").toLowerCase();
 

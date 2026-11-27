@@ -30,13 +30,15 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
   const [jumped, setJumped] = useState<{ heading: Heading; top: number }>();
   const jumpedIndex = jumped ? headings.indexOf(jumped.heading) : -1;
 
+  const restoreTimer = useRef<number>(undefined);
+  const cancelRestore = useCallback(() => window.clearTimeout(restoreTimer.current), []);
   // タブを開いたときに前回のスクロール位置へ戻す。図や色付けで高さが変わるので少し後にもう一度。
   useLayoutEffect(() => {
     const el = body.current;
     if (!el || !initialScroll) return;
     el.scrollTop = initialScroll;
-    const t = window.setTimeout(() => (el.scrollTop = initialScroll), 300);
-    return () => window.clearTimeout(t);
+    restoreTimer.current = window.setTimeout(() => (el.scrollTop = initialScroll), 300);
+    return cancelRestore;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -90,6 +92,7 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
           scroller={body}
           onOpenLink={onOpenLink}
           anchor={tab.anchor}
+          onAnchorScrolled={cancelRestore}
           find={find.open ? { query: find.query, index: find.index } : undefined}
           onFindResult={setResult}
           onRendered={() => setVersion((v) => v + 1)}
