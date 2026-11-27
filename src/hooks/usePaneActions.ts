@@ -20,7 +20,7 @@ export function usePaneActions(
     if (!t) return;
     const op = otherPane(paneId);
     const other = op ? activeTab(wsRef.current.panes[op]) : undefined;
-    const canCompare = t.kind === "doc" && other?.kind === "doc";
+    const canCompare = t.kind === "doc" && !t.readError && other?.kind === "doc" && !other.readError;
     const splitThis = (side: Side) => {
       updatePane(paneId, (q) => ({ ...q, active: tabIdx }));
       splitTab(paneId, side);
@@ -54,7 +54,7 @@ export function usePaneActions(
   const printPane = async (i: string) => {
     const p = wsRef.current.panes[i];
     const t = p && activeTab(p);
-    if (t?.kind !== "doc") return;
+    if (t?.kind !== "doc" || t.readError) return;
     focusPane(i);
     if (t.mode === "edit") updateActiveTab(i, (x) => (x.kind === "doc" ? { ...x, mode: "view" } : x));
     await new Promise((r) => setTimeout(r, 150));
@@ -68,7 +68,7 @@ export function usePaneActions(
   };
 
   const toggleMode = (i: string) =>
-    updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, mode: t.mode === "view" ? "edit" : "view" } : t));
+    updateActiveTab(i, (t) => (t.kind === "doc" && !t.readError ? { ...t, mode: t.mode === "view" ? "edit" : "view" } : t));
 
   const findInPane = (i: string) => setCommands((cs) => ({ ...cs, [i]: { type: "find", n: (cs[i]?.n ?? 0) + 1 } }));
 

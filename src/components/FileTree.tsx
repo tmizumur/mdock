@@ -4,6 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ChevronRight, ChevronsDownUp, FilePlus, FolderPlus } from "lucide-react";
 import { Entry, copyText, createEntry, dirname, isMarkdown, norm, renameEntry, trashEntry } from "../lib/api";
+import { type Creating, type Row, isFolderOpen, treeRows } from "../lib/fileTree";
 import { TreeIcon, fileIcon, folderIcon } from "../lib/fileIcons";
 import { ContextMenu, type MenuItem } from "./Dialogs";
 import type { GitLookup, GitMark } from "../lib/git";
@@ -13,6 +14,7 @@ type Props = {
   entries: Entry[];
   openPaths: string[];
   onOpen: (path: string, otherPane: boolean, newTab: boolean) => void;
+  onLoadDirectory: (dir: string) => void;
   /** ファイルを作った・消したなど、ツリーを読み直してほしいとき */
   onChanged: () => void;
   /** 名前を変えたとき（開いているタブのパスを直す） */
@@ -21,11 +23,6 @@ type Props = {
   /** git の変更状態（リポジトリでない・設定でオフのときは何も返さない） */
   git: GitLookup;
 };
-
-type Creating = { dir: string; isDir: boolean };
-type Row =
-  | { kind: "entry"; entry: Entry; depth: number; parent: string }
-  | { kind: "create"; dir: string; isDir: boolean; depth: number };
 
 const ROW_H = 28;
 
@@ -55,7 +52,7 @@ export function ExplorerControls({ onCreate, onCollapse }: {
  * ファイルツリー。展開している行を平らなリストにして、見えている行だけ描く（1万ファイルでも軽い）。
  * ↑↓ で移動、→← で開閉、Enter で開く。右クリックでファイル操作。
  */
-export default function FileTree({ root, entries, openPaths, onOpen, onChanged, onRenamed, onError, git }: Props) {
+export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirectory, onChanged, onRenamed, onError, git }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [expandTop, setExpandTop] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -64,24 +61,12 @@ export default function FileTree({ root, entries, openPaths, onOpen, onChanged, 
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
-  const isOpen = (e: Entry, depth: number) => open[e.path] ?? (expandTop && depth === 0);
+  const isOpen = (e: Entry, depth: number) => isFolderOpen(e.path, depth, open, expandTop);
 
-  const rows = useMemo(() => {
-    const out: Row[] = [];
-    if (creating && norm(creating.dir) === norm(root)) out.push({ kind: "create", dir: root, isDir: creating.isDir, depth: 0 });
-    const walk = (list: Entry[], depth: number, parent: string) => {
-      for (const e of list) {
-        out.push({ kind: "entry", entry: e, depth, parent });
-        if (e.is_dir && isOpen(e, depth)) {
-          if (creating && creating.dir === e.path) out.push({ kind: "create", dir: e.path, isDir: creating.isDir, depth: depth + 1 });
-          walk(e.children, depth + 1, e.path);
-        }
-      }
-    };
-    walk(entries, 0, root);
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, open, creating, root, expandTop]);
+  const rows = useMemo(
+    () => treeRows(entries, root, { open, expandTop, creating }),
+    [entries, root, open, expandTop, creating],
+  );
 
   const virt = useVirtualizer({
     count: rows.length,
@@ -108,11 +93,16 @@ export default function FileTree({ root, entries, openPaths, onOpen, onChanged, 
     if (i >= 0) virt.scrollToIndex(i, { align: "auto" });
   };
 
-  const toggle = (e: Entry, depth: number, value?: boolean) => setOpen((o) => ({ ...o, [e.path]: value ?? !isOpen(e, depth) }));
+  const toggle = (e: Entry, depth: number, value = !isOpen(e, depth)) => {
+    setOpen((o) => ({ ...o, [e.path]: value }));
+    if (value && e.loaded === false) onLoadDirectory(e.path);
+  };
 
   // ---- ファイル操作 ----
   const startCreate = (dir: string, isDir: boolean) => {
     setOpen((o) => ({ ...o, [dir]: true }));
+    const row = rows[indexOf(dir)];
+    if (row?.kind === "entry" && row.entry.loaded === false) onLoadDirectory(dir);
     setCreating({ dir, isDir });
   };
   const commitCreate = async (name: string) => {
@@ -200,6 +190,7 @@ export default function FileTree({ root, entries, openPaths, onOpen, onChanged, 
       ev.preventDefault();
       if (row.entry.is_dir) {
         if (!isOpen(row.entry, row.depth)) toggle(row.entry, row.depth, true);
+        else if (row.entry.loaded === false) onLoadDirectory(row.entry.path);
         else go(entryRows(i + 1, 1));
       }
     } else if (ev.key === "ArrowLeft") {
@@ -235,7 +226,7 @@ export default function FileTree({ root, entries, openPaths, onOpen, onChanged, 
         setOpen({});
         setCreating(null);
       }} />
-      {!entries.length && !creating ? (
+      {!rows.length ? (
         <div className="tree-empty" onContextMenu={(ev) => openMenu(ev, null)}>
           ファイルがありません
           {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}

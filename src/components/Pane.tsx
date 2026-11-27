@@ -5,9 +5,9 @@ import TabBar from "./TabBar";
 import DiffView from "./DiffView";
 import type { EditorHandle } from "./Editor";
 import type { OutlineState } from "./Outline";
-import { norm } from "../lib/api";
+import { type FileError, norm } from "../lib/api";
 import { markdownHeadings } from "../lib/markdown";
-import { type DocTab, type PaneState, type ViewMode, activeTab, isDirty } from "../lib/tabs";
+import { type DiffSide, type DocTab, type PaneState, type ViewMode, activeTab, isDirty } from "../lib/tabs";
 import { useDrag } from "../lib/dnd";
 import { editorTopLine, previewTopLine, scrollEditorToLine, scrollPreviewToLine } from "../lib/scrollSync";
 
@@ -37,6 +37,7 @@ type Props = {
   onChange: (content: string) => void;
   onMode: (mode: ViewMode) => void;
   onSave: () => void;
+  onRetryRead: (tabId: string, force: boolean, side?: DiffSide) => void;
   /** 外部で変更された内容を読み込む（自分の未保存の変更は捨てる） */
   onReloadExternal: () => void;
   /** 外部の変更を読み込まず、自分の変更を保持する */
@@ -57,12 +58,18 @@ export default function Pane(props: Props) {
   const { idx, pane, active, rootDir, command, scrollOf, onScroll, onFocus, onChange, onMode, onSave, onOpenLink } = props;
   const tab = activeTab(pane);
   const doc = tab?.kind === "doc" ? tab : undefined;
+  const failedSides = tab?.kind === "diff"
+    ? (["left", "right"] as const).flatMap((side) => {
+      const error = tab.reads?.[side]?.error;
+      return error ? [{ side, error }] : [];
+    })
+    : [];
   const editor = useRef<EditorHandle>(null);
   const [find, setFind] = useState<FindState>({ open: false, query: "", index: 0, focus: 0 });
   const [reported, setReported] = useState<{ tabId: string; mode: ViewMode; outline: OutlineState }>();
-  const tabId = doc?.id;
+  const tabId = doc?.readError ? undefined : doc?.id;
   const mode = doc?.mode;
-  const editSource = mode === "edit" ? doc?.content : undefined;
+  const editSource = mode === "edit" && !doc?.readError ? doc?.content : undefined;
   const editHeadings = useMemo(() => editSource === undefined ? undefined : markdownHeadings(editSource), [editSource]);
   const onOutline = useCallback((outline: OutlineState) => {
     if (tabId && mode) setReported({ tabId, mode, outline });
@@ -75,7 +82,7 @@ export default function Pane(props: Props) {
 
   // ⌘F: 表示中はプレビュー内検索、編集中は CodeMirror の検索
   useEffect(() => {
-    if (!command || command.type !== "find" || !doc) return;
+    if (!command || command.type !== "find" || !doc || doc.readError) return;
     if (doc.mode === "view") setFind((f) => ({ ...f, open: true, focus: f.focus + 1 }));
     else editor.current?.openSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,7 +111,7 @@ export default function Pane(props: Props) {
         onActivate={props.onActivateTab}
         onClose={props.onCloseTab}
         onContextMenu={props.onTabMenu}
-        actions={doc && (
+        actions={doc && !doc.readError && (
           <div className="segmented pane-modes" role="group" aria-label="表示モード">
             {MODES.map(([m, label, title, Icon]) => (
               <button key={m} className={doc.mode === m ? "on" : ""} aria-pressed={doc.mode === m} aria-label={label} title={title} onClick={() => doc.mode !== m && onMode(m)}>
@@ -131,7 +138,7 @@ export default function Pane(props: Props) {
               </span>
             ))}
           </nav>
-          {doc && (
+          {doc && !doc.readError && (
             <span className="pane-actions">
               {doc.mode !== "view" && (
                 <button className="btn" disabled={!dirty} onClick={onSave} title="保存 (⌘S)">保存</button>
@@ -161,10 +168,29 @@ export default function Pane(props: Props) {
           </button>
         </div>
       )}
+      {doc && !doc.deleted && doc.externalReadError && (
+        <div className="file-notice" role="status">
+          外部で変更されましたが、読み直せませんでした。
+          <small>{doc.externalReadError.message}</small>
+        </div>
+      )}
       {!tab ? (
         <div className="placeholder">
           左のツリーからファイルを選ぶか、ここにドラッグしてください
           <small>⌘+クリックで隣のペイン、⌥+クリックで新しいタブに開けます。タブやファイルをペインの端にドラッグすると画面を分割できます</small>
+        </div>
+      ) : tab.kind === "doc" && tab.readError ? (
+        <div className="placeholder">
+          <div role="status">開けませんでした</div>
+          <ReadFailure error={tab.readError} onRetry={(force) => props.onRetryRead(tab.id, force)} />
+        </div>
+      ) : tab.kind === "diff" && failedSides.length ? (
+        <div className="placeholder">
+          <div role="status">開けませんでした</div>
+          {failedSides.map(({ side, error }) => (
+            <ReadFailure key={side} path={tab[side]} error={error}
+              onRetry={(force) => props.onRetryRead(tab.id, force, side)} />
+          ))}
         </div>
       ) : tab.kind === "diff" ? (
         <div className="pane-main">
@@ -217,6 +243,20 @@ export default function Pane(props: Props) {
       <DropOverlay paneId={idx} />
       </div>
     </section>
+  );
+}
+
+const formatMegabytes = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 2 });
+
+function ReadFailure({ error, path, onRetry }: { error: FileError; path?: string; onRetry: (force: boolean) => void }) {
+  const size = error.size === undefined ? undefined : formatMegabytes.format(error.size / (1024 * 1024));
+  const force = error.code === "large_file";
+  return (
+    <>
+      {path && <small><bdi>{path}</bdi></small>}
+      <small role="status">{size !== undefined && `このファイルは ${size} MB あります。`}{(!force || size === undefined) && error.message}</small>
+      <button type="button" className="btn" onClick={() => onRetry(force)}>{force ? "それでも開く" : "再読み込み"}</button>
+    </>
   );
 }
 

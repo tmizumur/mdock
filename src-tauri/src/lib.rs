@@ -1,4 +1,5 @@
 mod git;
+mod text_file;
 mod watch;
 
 use serde::Serialize;
@@ -12,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
+use text_file::{DiskStamp, FileError, TextInfo};
 
 /// フォルダツリーの1要素
 #[derive(Serialize)]
@@ -20,6 +22,8 @@ struct Entry {
     path: String,
     is_dir: bool,
     children: Vec<Entry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loaded: Option<bool>,
 }
 
 /// ツリーから除外するフォルダ（依存関係、ビルド成果物、Git の管理データなど）
@@ -42,12 +46,30 @@ const SKIP_FILES: &[&str] = &[".DS_Store"];
 
 /// 除外対象を飛ばし、隠しファイル・フォルダを含めてツリーを読み込む。
 fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
-    if depth > 12 {
+    walk_dir(dir, depth, &mut Vec::new(), None)
+}
+
+const TREE_DEPTH: usize = 13;
+
+fn walk_dir(
+    dir: &Path,
+    depth: usize,
+    ancestors: &mut Vec<PathBuf>,
+    max_depth: Option<usize>,
+) -> Vec<Entry> {
+    if depth >= TREE_DEPTH || max_depth.is_some_and(|limit| depth >= limit) {
+        return vec![];
+    }
+    let Ok(real) = dir.canonicalize() else {
+        return vec![];
+    };
+    if ancestors.contains(&real) {
         return vec![];
     }
     let Ok(read) = fs::read_dir(dir) else {
         return vec![];
     };
+    ancestors.push(real);
     let mut entries: Vec<Entry> = read
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -60,8 +82,11 @@ fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
             if is_dir && SKIP_DIRS.contains(&name.as_str()) {
                 return None;
             }
-            let children = if is_dir {
-                walk(&path, depth + 1)
+            let deferred = is_dir
+                && depth + 1 < TREE_DEPTH
+                && max_depth.is_some_and(|limit| depth + 1 >= limit);
+            let children = if is_dir && !deferred {
+                walk_dir(&path, depth + 1, ancestors, max_depth)
             } else {
                 vec![]
             };
@@ -70,9 +95,11 @@ fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
                 path: path.to_string_lossy().to_string(),
                 is_dir,
                 children,
+                loaded: deferred.then_some(false),
             })
         })
         .collect();
+    ancestors.pop();
     // フォルダが先、その後に名前順
     entries.sort_by(|a, b| {
         b.is_dir
@@ -85,13 +112,16 @@ fn walk(dir: &Path, depth: usize) -> Vec<Entry> {
 // 読み込みは画面（メインスレッド）を止めないよう、別スレッドで行う
 
 #[tauri::command]
-async fn read_tree(root: String) -> Result<Vec<Entry>, String> {
+async fn read_tree(root: String, max_depth: Option<usize>) -> Result<Vec<Entry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = PathBuf::from(root);
         if !root.is_dir() {
             return Err("フォルダが見つかりません".into());
         }
-        Ok(walk(&root, 0))
+        Ok(match max_depth {
+            Some(limit) => walk_dir(&root, 0, &mut Vec::new(), Some(limit)),
+            None => walk(&root, 0),
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -100,23 +130,87 @@ async fn read_tree(root: String) -> Result<Vec<Entry>, String> {
 /// 変更のあったフォルダだけを読み直す（ツリー全体を読み直すと重いため）。
 /// フォルダごとに中身（サブツリー）を返す。フォルダが無くなっていれば null。
 #[tauri::command]
-async fn read_dirs(dirs: Vec<String>) -> Result<Vec<Option<Vec<Entry>>>, String> {
+async fn read_dirs(
+    dirs: Vec<String>,
+    root: String,
+    max_depth: Option<usize>,
+) -> Result<Vec<Option<Vec<Entry>>>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         dirs.iter()
-            .map(|d| {
-                let p = Path::new(d);
-                p.is_dir().then(|| walk(p, 0))
-            })
+            .map(|d| read_subtree(Path::new(d), Path::new(&root), max_depth))
             .collect()
     })
     .await
     .map_err(|e| e.to_string())
 }
 
+fn read_subtree(dir: &Path, root: &Path, max_depth: Option<usize>) -> Option<Vec<Entry>> {
+    if !dir.is_dir() || !dir.starts_with(root) {
+        return None;
+    }
+    let mut ancestors = Vec::new();
+    let parents: Vec<_> = dir
+        .ancestors()
+        .skip(1)
+        .take_while(|p| p.starts_with(root))
+        .collect();
+    let depth = parents.len();
+    for parent in parents.into_iter().rev() {
+        let real = parent.canonicalize().ok()?;
+        if ancestors.contains(&real) {
+            return Some(vec![]);
+        }
+        ancestors.push(real);
+    }
+    let limit = max_depth.map(|limit| depth.saturating_add(limit));
+    Some(walk_dir(dir, depth, &mut ancestors, limit))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{fs, walk};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn walk_marks_unread_folders_at_max_depth() {
+        let root = super::text_file::tests::TempDir::new();
+        fs::create_dir_all(root.0.join("a/b")).unwrap();
+        fs::write(root.0.join("a/note.md"), "").unwrap();
+        fs::write(root.0.join("a/b/deep.md"), "").unwrap();
+
+        let shallow = super::walk_dir(&root.0, 0, &mut Vec::new(), Some(2));
+        let entries = &shallow[0].children;
+        assert_eq!(shallow[0].loaded, None);
+        assert_eq!(entries[0].name, "b");
+        assert_eq!(entries[0].loaded, Some(false));
+        assert!(entries[0].children.is_empty());
+        assert_eq!(entries[1].name, "note.md");
+        assert_eq!(entries[1].loaded, None);
+        assert_eq!(serde_json::to_value(&entries[0]).unwrap()["loaded"], false);
+
+        let full = walk(&root.0, 0);
+        assert_eq!(full[0].children[0].loaded, None);
+        assert_eq!(full[0].children[0].children[0].name, "deep.md");
+    }
+
+    #[test]
+    fn read_subtree_limits_depth_relative_to_the_expanded_folder() {
+        let root = super::text_file::tests::TempDir::new();
+        let dir = root.0.join("a/b");
+        fs::create_dir_all(dir.join("c/d")).unwrap();
+        fs::write(dir.join("c/d/deep.md"), "").unwrap();
+
+        let shallow = super::read_subtree(&dir, &root.0, Some(2)).unwrap();
+        assert_eq!(shallow[0].name, "c");
+        assert_eq!(shallow[0].loaded, None);
+        let boundary = &shallow[0].children[0];
+        assert_eq!(boundary.name, "d");
+        assert_eq!(boundary.loaded, Some(false));
+        assert!(boundary.children.is_empty());
+
+        let full = super::read_subtree(&dir, &root.0, None).unwrap();
+        assert_eq!(full[0].children[0].children[0].name, "deep.md");
+    }
 
     #[test]
     fn walk_includes_hidden_entries_and_skips_exclusions() {
@@ -152,15 +246,44 @@ mod tests {
         assert_eq!(github.children.len(), 1);
         assert_eq!(github.children[0].name, "workflow.yml");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_stops_at_ancestor_links() {
+        use std::os::unix::fs::symlink;
+
+        let root = super::text_file::tests::TempDir::new();
+        let dir = root.0.join("a");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("note.md"), "").unwrap();
+        symlink("..", dir.join("link")).unwrap();
+        symlink("a", root.0.join("alias")).unwrap();
+
+        let entries = walk(&root.0, 0);
+        for entry in &entries {
+            assert!(entry.children[0].is_dir);
+            assert_eq!(entry.children[0].name, "link");
+            assert!(entry.children[0].children.is_empty());
+            assert_eq!(entry.children[1].name, "note.md");
+        }
+        assert_eq!(entries.len(), 2);
+        let subtree = super::read_subtree(&dir, &root.0, None).unwrap();
+        assert!(subtree[0].children.is_empty());
+        assert!(
+            super::read_subtree(&dir.join("link"), &root.0, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[tauri::command]
-async fn read_text(path: String) -> Result<String, String> {
+async fn read_text(path: String, force: Option<bool>) -> Result<TextInfo, FileError> {
     tauri::async_runtime::spawn_blocking(move || {
-        fs::read_to_string(&path).map_err(|e| e.to_string())
+        text_file::read(Path::new(&path), force.unwrap_or(false))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(FileError::other)?
 }
 
 /// ファイルの状態（外部での変更の確認に使う）
@@ -241,8 +364,24 @@ async fn confirm_open_url(window: WebviewWindow, url: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn write_text(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content).map_err(|e| e.to_string())
+async fn write_text(
+    path: String,
+    content: String,
+    encoding: Option<String>,
+    bom: Option<bool>,
+    expected: Option<DiskStamp>,
+) -> Result<DiskStamp, FileError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        text_file::write(
+            Path::new(&path),
+            &content,
+            encoding.as_deref(),
+            bom.unwrap_or(false),
+            expected,
+        )
+    })
+    .await
+    .map_err(FileError::other)?
 }
 
 // ---- ファイル操作（ツリーの右クリックメニュー） ----
@@ -693,8 +832,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 .build(app)?,
         )
         .item(
-            &MenuItemBuilder::with_id("open-folder", "フォルダを開く…")
+            &MenuItemBuilder::with_id("open-file", "ファイルを開く…")
                 .accelerator("CmdOrCtrl+O")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open-folder", "フォルダを開く…")
+                .accelerator("CmdOrCtrl+Shift+O")
                 .build(app)?,
         )
         .separator()

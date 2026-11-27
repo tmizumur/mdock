@@ -15,11 +15,11 @@ import { useMenuActions } from "./hooks/useMenuActions";
 import { usePaneActions } from "./hooks/usePaneActions";
 import { usePersist, useRestoreSession } from "./hooks/useSession";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { useFinderOpen, useWindowDrop, useWindowTitle } from "./hooks/useWindowEvents";
+import { useFileOpen, useWindowTitle } from "./hooks/useWindowEvents";
 import { useWorkspace, useWorkspaceDrop } from "./hooks/useWorkspace";
 import { useDragPos, useDrag } from "./lib/dnd";
 import { type LayoutNode } from "./lib/layout";
-import { type ViewMode, activeTab, emptyPane } from "./lib/tabs";
+import { type ViewMode, activeTab, emptyPane, textFormat } from "./lib/tabs";
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -33,10 +33,10 @@ export default function App() {
   const workspace = useWorkspace(ask, setError);
   const {
     ws, wsRef, activeIdx, activeRef, order, scrolls, focusPane, updatePane, updateActiveTab,
-    openFile, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
+    openFile, retryRead, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
   } = workspace;
   const folder = useFolder(workspace, setError);
-  const { root, tree, watchedRoot, pickFolder, openFolder, refreshTree } = folder;
+  const { root, tree, watchedRoot, pickFolder, openFolder, loadDirectory } = folder;
 
   // リスナーはこの順に登録する
   const git = useGitStatus(root, settings.gitStatus, settings.statusBar);
@@ -45,14 +45,13 @@ export default function App() {
   const { ready, sidebarLayout } = session;
   const { schedulePersist, flush } = usePersist(session, folder, workspace, ask);
   useWindowTitle(root);
-  const { watchKey, watchedFiles } = useLiveReload(ready, folder, workspace);
-  useWindowDrop(openFolder, workspace);
-  useFinderOpen(ready, folder, workspace);
+  const { watchKey, watchedFiles, refreshTree } = useLiveReload(ready, folder, workspace);
+  const pickFiles = useFileOpen(ready, folder, workspace, setError);
 
   const paneActions = usePaneActions(workspace);
   const { commands, menu, setMenu, openTabMenu, printPane } = paneActions;
-  const actions = useMenuActions(workspace, pickFolder, printPane, setSettingsOpen);
-  useShortcuts(workspace, paneActions, actions, pickFolder, updateSettings, setSettingsOpen, setError);
+  const actions = useMenuActions(workspace, pickFiles, pickFolder, printPane, setSettingsOpen);
+  useShortcuts(workspace, paneActions, actions, updateSettings, setSettingsOpen, setError);
 
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
@@ -76,6 +75,7 @@ export default function App() {
       onTabMenu={(k, x, y) => openTabMenu(i, k, x, y)}
       onChange={(content) => updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, content } : t))}
       onMode={(mode: ViewMode) => updateActiveTab(i, (t) => (t.kind === "doc" ? { ...t, mode } : t))}
+      onRetryRead={retryRead}
       onSave={() => {
         const p = wsRef.current.panes[i];
         const t = p && activeTab(p);
@@ -83,10 +83,17 @@ export default function App() {
       }}
       onReloadExternal={() =>
         updateActiveTab(i, (t) =>
-          t.kind === "doc" && t.external !== undefined ? { ...t, content: t.external, saved: t.external, external: undefined } : t,
+          t.kind === "doc" && t.external ? { ...t, ...textFormat(t.external), content: t.external.text, saved: t.external.text, savedBom: undefined, external: undefined } : t,
         )
       }
-      onKeepMine={() => updateActiveTab(i, (t) => (t.kind === "doc" && t.external !== undefined ? { ...t, saved: t.external, external: undefined } : t))}
+      onKeepMine={() => updateActiveTab(i, (t) => {
+        if (t.kind !== "doc" || !t.external) return t;
+        const format = textFormat(t.external);
+        return {
+          ...t, ...format, saved: t.external.text, external: undefined,
+          ...(t.savedBom !== undefined ? { bom: t.bom, savedBom: t.external.bom === !!t.bom ? undefined : t.external.bom } : {}),
+        };
+      })}
       onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab })}
       onPrint={() => printPane(i)}
       printTarget={activeIdx === i}
@@ -94,7 +101,7 @@ export default function App() {
   );
 
   const currentTab = ws.panes[activeIdx] ? activeTab(ws.panes[activeIdx]) : undefined;
-  const activeOutline = currentTab?.kind === "doc" && outline?.paneId === activeIdx &&
+  const activeOutline = currentTab?.kind === "doc" && !currentTab.readError && outline?.paneId === activeIdx &&
     outline.tabId === currentTab.id && outline.mode === currentTab.mode ? outline.outline : undefined;
 
   const visiblePaths = order
@@ -166,6 +173,7 @@ export default function App() {
                   entries={tree}
                   openPaths={visiblePaths}
                   onOpen={onTreeOpen}
+                  onLoadDirectory={loadDirectory}
                   onChanged={refreshTree}
                   onRenamed={onRenamed}
                   onError={setError}

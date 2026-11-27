@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Layout } from "react-resizable-panels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask as askDialog } from "@tauri-apps/plugin-dialog";
 import { type useUnsavedDialog } from "../components/Dialogs";
-import { readText, writeText } from "../lib/api";
+import { type DiskStamp, parseFileError, readTextResult, writeText } from "../lib/api";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader } from "../lib/dnd";
 import { type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, setSizes, splitLeaf } from "../lib/layout";
-import { type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, newId, tabTitle } from "../lib/tabs";
-import { type Workspace, activeAfterRemove, allTabs, cloneTab, closeTabIn, dropIfEmpty, mapPanes, newPaneId, resetLayoutIn, toggleSplitIn } from "../lib/workspace";
+import { createOpenRequests } from "../lib/openRequests";
+import { type DiffSide, type DiffTab, type DocTab, type PaneState, type Tab, activeTab, emptyPane, isDirty, newId, receiveDiffText, receiveDocText, tabTitle, textFormat } from "../lib/tabs";
+import { type Workspace, activeAfterRemove, allTabs, cloneTab, closeTabIn, dropIfEmpty, mapPanes, mapTabs, newPaneId, resetLayoutIn, toggleSplitIn } from "../lib/workspace";
 
 export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], setError: (error: string | null) => void) {
   const [ws, setWs] = useState<Workspace>(() => ({ panes: { p0: emptyPane() }, layout: { type: "pane", id: "p0" } }));
   const [activeIdx, setActiveIdx] = useState("p0");
+  const [openRequests] = useState(createOpenRequests);
   /** タブごとのスクロール位置（タブ ID → px） */
   const scrolls = useRef(new Map<string, number>());
 
@@ -64,52 +67,76 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     async (path: string, paneId: string, opts: { newTab?: boolean; anchor?: string; split?: Side; at?: number } = {}) => {
       const anchor = opts.anchor ? { id: opts.anchor, nonce: Date.now() } : undefined;
       const has = (p: PaneState | undefined) => (p ? p.tabs.findIndex((t) => t.kind === "doc" && t.path === path) : -1);
-      const read = async () => {
-        try {
-          return await readText(path);
-        } catch (e) {
-          setError(`開けませんでした: ${e}`);
-          return null;
-        }
+      const read = async (): Promise<DocTab> => {
+        const { info, error } = await readTextResult(path);
+        const text = info?.text ?? "";
+        return {
+          id: newId(), kind: "doc", path, content: text, saved: text, mode: "view", anchor,
+          ...(info ? textFormat(info) : { readError: error }),
+        };
       };
-      const makeTab = (text: string): DocTab => ({ id: newId(), kind: "doc", path, content: text, saved: text, mode: "view", anchor });
+      const id = livePane(paneId);
+      const requestStatus = openRequests.start(id);
       if (opts.split) {
-        const text = await read();
-        if (text === null) return;
-        splitWith(paneId, opts.split, [makeTab(text)]);
+        const tab = await read();
+        if (requestStatus() !== "latest" || !wsRef.current.panes[id]) return;
+        splitWith(id, opts.split, [tab]);
         setError(null);
         return;
       }
-      if (has(wsRef.current.panes[livePane(paneId)]) < 0) {
-        const text = await read();
-        if (text === null) return;
-        const id = livePane(paneId);
+      const pane = wsRef.current.panes[id];
+      const previous = activeTab(pane)?.id;
+      if (has(pane) < 0) {
+        const tab = await read();
+        const status = requestStatus();
+        const latest = status === "latest";
+        const insert = opts.newTab || opts.at !== undefined;
+        if (status === "cleared" || (!latest && !insert) || !wsRef.current.panes[id]) return;
         updatePane(id, (p) => {
           const k = has(p);
-          if (k >= 0) return { ...p, active: k };
-          const tab = makeTab(text);
+          if (k >= 0) return latest ? { ...p, active: k } : p;
           const cur = p.tabs[p.active];
-          if (!opts.newTab && opts.at === undefined && cur?.kind === "doc" && !isDirty(cur)) {
+          if (!insert && cur?.kind === "doc" && cur.id === previous && !isDirty(cur)) {
             scrolls.current.delete(cur.id);
             return { ...p, tabs: p.tabs.map((t, i) => (i === p.active ? tab : t)) };
           }
           const at = Math.max(0, Math.min(opts.at ?? (p.tabs.length ? p.active + 1 : 0), p.tabs.length));
-          return { tabs: [...p.tabs.slice(0, at), tab, ...p.tabs.slice(at)], active: at };
+          // 遅れて届いた新しいタブは背面に追加する
+          const active = latest || !p.tabs.length ? at : p.active + (at <= p.active ? 1 : 0);
+          return { tabs: [...p.tabs.slice(0, at), tab, ...p.tabs.slice(at)], active };
         });
-        focusPane(id);
+        if (!latest) return;
       } else {
-        const id = livePane(paneId);
         updatePane(id, (p) => {
           const k = has(p);
           return { ...p, active: k, tabs: p.tabs.map((t, i) => (i === k && anchor && t.kind === "doc" ? { ...t, anchor } : t)) };
         });
-        focusPane(id);
       }
+      focusPane(id);
       setError(null);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [focusPane],
+    [focusPane, openRequests],
   );
+
+  const retryRead = async (tabId: string, force: boolean, side?: DiffSide) => {
+    const tab = allTabs(wsRef.current).find((t) => t.id === tabId);
+    if (tab?.kind === "doc" && tab.readError) {
+      const allowed = force || tab.force;
+      const result = await readTextResult(tab.path, allowed);
+      apply((w) => mapTabs(w, (t) => {
+        if (t.kind !== "doc" || t.id !== tabId || t.path !== tab.path || !t.readError) return t;
+        return result.info ? receiveDocText(t, result.info, allowed) : { ...t, readError: result.error };
+      }));
+    } else if (tab?.kind === "diff" && side && tab.reads?.[side]?.error) {
+      const allowed = force || tab.reads[side].force;
+      const result = await readTextResult(tab[side], allowed);
+      apply((w) => mapTabs(w, (t) => {
+        if (t.kind !== "diff" || t.id !== tabId || t[side] !== tab[side] || !t.reads?.[side]?.error) return t;
+        return receiveDiffText(t, side, result, result.info ? allowed : t.reads[side].force);
+      }));
+    }
+  };
 
   /** 未保存のタブがあれば確認する。true なら続けてよい */
   const confirmDirty = useCallback(
@@ -132,41 +159,92 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
 
   /** すべてのタブを閉じる（分割の形はそのまま） */
   const clearTabs = useCallback(() => {
+    openRequests.clear();
     apply((w) => mapPanes(w, () => emptyPane()));
     scrolls.current.clear();
-  }, [apply]);
+  }, [apply, openRequests]);
 
 
+  const saving = useRef(new Set<string>());
   /** タブを保存する。同じファイルを開いているほかのタブ（未編集のもの）にも反映する */
   const saveTab = useCallback(async (tabId: string): Promise<boolean> => {
     const t = allTabs(wsRef.current).find((x) => x.id === tabId);
     if (!t || t.kind !== "doc") return true;
-    if (t.content === t.saved) return true;
-    const text = t.content;
-    try {
-      await writeText(t.path, text);
-    } catch (e) {
-      setError(`保存できませんでした: ${e}`);
+    if (!isDirty(t)) return true;
+    if (t.readError) {
+      setError("保存できませんでした。最初にファイルを読み込んでください。");
       return false;
     }
+    if (saving.current.has(t.path)) return false;
+    saving.current.add(t.path);
+    // 確認中にファイルの状態が変わったら、次の保存で確認し直す。
+    const currentForSave = () => {
+      const current = allTabs(wsRef.current).find((x) => x.id === tabId);
+      if (current?.kind !== "doc" || current.path !== t.path || current.readError ||
+          current.saved !== t.saved || current.encoding !== t.encoding || current.bom !== t.bom ||
+          current.savedBom !== t.savedBom || current.diskStamp !== t.diskStamp ||
+          current.lossy !== t.lossy || current.external !== t.external ||
+          current.externalReadError !== t.externalReadError || current.deleted !== t.deleted) return undefined;
+      return current;
+    };
+    const confirmOverwrite = () => askDialog("外部で変更されたファイルを上書きしますか？", {
+      title: "外部で変更されました", okLabel: "上書き", cancelLabel: "キャンセル",
+    });
+    let expected = t.externalReadError ? undefined : t.external?.diskStamp ?? t.diskStamp;
+    let text: string;
+    let diskStamp: DiskStamp;
+    let format = { encoding: t.encoding, bom: t.bom };
+    try {
+      if ((t.external || t.externalReadError) && !await confirmOverwrite()) return false;
+      if ((t.lossy || t.external?.lossy) && !await askDialog("このファイルには読み取れなかったバイトがあり、保存すると元のバイトは失われます。保存しますか？", {
+        title: "読み取れなかったバイト", okLabel: "保存", cancelLabel: "キャンセル",
+      })) return false;
+      for (;;) {
+        const current = currentForSave();
+        if (!current) return false;
+        text = current.content;
+        try {
+          diskStamp = await writeText(t.path, text, format, expected);
+          break;
+        } catch (error) {
+          const { code } = parseFileError(error);
+          if (code === "changed_on_disk" && expected) {
+            if (!await confirmOverwrite()) return false;
+            expected = undefined;
+          } else if (code === "unrepresentable" && format.encoding) {
+            if (!await askDialog(`この文字は ${format.encoding} で保存できません。UTF-8 で保存しますか？`, {
+              title: "文字コードを変更", okLabel: "UTF-8 で保存", cancelLabel: "キャンセル",
+            })) return false;
+            format = { encoding: undefined, bom: t.bom };
+          } else {
+            throw error;
+          }
+        }
+      }
+    } catch (e) {
+      setError(`保存できませんでした。 ${parseFileError(e).message}`);
+      return false;
+    } finally {
+      saving.current.delete(t.path);
+    }
+    const clear = { ...format, diskStamp, savedBom: undefined, lossy: undefined, external: undefined, externalReadError: undefined, deleted: false, readError: undefined };
+    const result = { info: { text, encoding: format.encoding ?? "UTF-8", bom: format.bom ?? false, lossy: false, diskStamp } };
     apply((w) =>
-      mapPanes(w, (p) => ({
-      ...p,
-      tabs: p.tabs.map((x): Tab => {
+      mapTabs(w, (x): Tab => {
         if (x.kind === "doc" && x.path === t.path) {
-          const clear = { external: undefined, deleted: false };
           if (x.id === tabId) return { ...x, saved: text, ...clear };
-          if (x.content === x.saved) return { ...x, content: text, saved: text, ...clear };
-          return { ...x, saved: text, ...clear };
+          const keepBom = x.savedBom !== undefined && !!x.bom !== !!format.bom;
+          const content = x.content === x.saved ? text : x.content;
+          return { ...x, content, saved: text, ...clear, ...(keepBom ? { bom: x.bom, savedBom: !!format.bom } : {}) };
         }
         if (x.kind === "diff" && (x.left === t.path || x.right === t.path)) {
-          return { ...x, ...(x.left === t.path ? { leftText: text } : {}), ...(x.right === t.path ? { rightText: text } : {}) };
+          const next = x.left === t.path ? receiveDiffText(x, "left", result, x.reads?.left?.force) : x;
+          return x.right === t.path ? receiveDiffText(next, "right", result, x.reads?.right?.force) : next;
         }
         return x;
       }),
-      })),
     );
-    return true;
+    return !isDirty(allTabs(wsRef.current).find((x) => x.id === tabId));
   }, [apply, setError]);
 
   /** ペインを消して（タブがなければ）、隣のペインを前面にする */
@@ -268,8 +346,11 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     const op = otherPane(paneId);
     const a = wsRef.current.panes[paneId]?.tabs[tabIdx];
     const b = op ? activeTab(wsRef.current.panes[op]) : undefined;
-    if (a?.kind !== "doc" || b?.kind !== "doc") return;
-    const tab: DiffTab = { id: newId(), kind: "diff", left: a.path, right: b.path, leftText: a.content, rightText: b.content };
+    if (a?.kind !== "doc" || a.readError || b?.kind !== "doc" || b.readError) return;
+    const tab: DiffTab = {
+      id: newId(), kind: "diff", left: a.path, right: b.path, leftText: a.content, rightText: b.content,
+      reads: { left: { force: a.force }, right: { force: b.force } },
+    };
     updatePane(paneId, (p) => ({ tabs: [...p.tabs.slice(0, tabIdx + 1), tab, ...p.tabs.slice(tabIdx + 1)], active: tabIdx + 1 }));
     focusPane(paneId);
   };
@@ -332,7 +413,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
 
   return {
     ws, wsRef, apply, activeIdx, activeRef, order, scrolls, focusPane, livePane,
-    updatePane, updateActiveTab, openFile, confirmDirty, clearTabs, saveTab,
+    updatePane, updateActiveTab, openFile, retryRead, confirmDirty, clearTabs, saveTab,
     closeTab, closeActiveTab, closeOthers, moveTab, splitTab, splitWith, cycleTab,
     otherPane, compareWithOther, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
   };

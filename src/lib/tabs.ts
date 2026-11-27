@@ -1,8 +1,18 @@
 /** ペインとタブの状態、セッション（session.json）の形式と移行 */
 
 import { type LayoutNode, type PresetLayout, PRESET_COUNT, leaves as leavesOf, presetLayout, validLayout } from "./layout";
+import type { DiskStamp, FileError, TextFormat, TextInfo, TextReadResult } from "./api";
 
 export type ViewMode = "view" | "edit" | "split";
+
+export const textFormat = (info: TextInfo): TextFormat & { lossy?: boolean; diskStamp: DiskStamp } => ({
+  encoding: info.encoding === "UTF-8" ? undefined : info.encoding,
+  bom: info.bom || undefined,
+  lossy: info.lossy || undefined,
+  diskStamp: info.diskStamp,
+});
+
+const sameStamp = (a: DiskStamp | undefined, b: DiskStamp) => a?.mtime === b.mtime && a.size === b.size;
 
 export type DocTab = {
   id: string;
@@ -12,14 +22,26 @@ export type DocTab = {
   /** ディスク上の内容（未保存の判定に使う） */
   saved: string;
   mode: ViewMode;
+  encoding?: string;
+  bom?: boolean;
+  /** BOM を編集した下書きの比較元 */
+  savedBom?: boolean;
+  diskStamp?: DiskStamp;
+  lossy?: boolean;
+  force?: boolean;
+  readError?: FileError;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンクから開いたとき） */
   anchor?: { id: string; nonce: number };
   /** ファイルが外部で削除された（同名で作り直されたら戻る） */
   deleted?: boolean;
   /** 未保存の変更があるときに、外部で書き換わった内容（再読み込みするか確認する） */
-  external?: string;
+  external?: TextInfo;
+  /** 外部で変更されたファイルを読み直せなかった理由 */
+  externalReadError?: FileError;
 };
 
+export type DiffSide = "left" | "right";
+export type DiffRead = { force?: boolean; error?: FileError };
 export type DiffTab = {
   id: string;
   kind: "diff";
@@ -27,9 +49,47 @@ export type DiffTab = {
   right: string;
   leftText: string;
   rightText: string;
+  reads?: Partial<Record<DiffSide, DiffRead>>;
 };
 
 export type Tab = DocTab | DiffTab;
+
+/** ディスクから読み直した内容を、未保存の変更を残しながら反映する。 */
+export function receiveDocText(tab: DocTab, info: TextInfo, force = tab.force): DocTab {
+  const { text } = info;
+  const format = textFormat(info);
+  const clear = { ...format, force, deleted: false, readError: undefined, external: undefined, externalReadError: undefined };
+  const bomEdited = tab.savedBom !== undefined && tab.savedBom !== !!tab.bom;
+  const sameBaseBom = bomEdited ? tab.savedBom === info.bom : tab.bom === format.bom;
+  const settled = !tab.deleted && !tab.readError && !tab.external && !tab.externalReadError && tab.force === force &&
+    tab.encoding === format.encoding && sameBaseBom && tab.lossy === format.lossy &&
+    sameStamp(tab.diskStamp, info.diskStamp);
+  if (!isDirty(tab)) {
+    return text === tab.saved && settled ? tab : { ...tab, ...clear, content: text, saved: text };
+  }
+  if (text === tab.content && !tab.readError && (!bomEdited || info.bom === !!tab.bom)) {
+    return { ...tab, ...clear, saved: text, savedBom: undefined };
+  }
+  if (text === tab.saved && (!bomEdited || info.bom === tab.savedBom)) {
+    return settled ? tab : { ...tab, ...clear, bom: bomEdited ? tab.bom : format.bom };
+  }
+  const external = tab.external;
+  return !tab.deleted && !tab.readError && !tab.externalReadError && tab.force === force && external?.text === text &&
+    external.encoding === info.encoding && external.bom === info.bom && external.lossy === info.lossy &&
+    sameStamp(external.diskStamp, info.diskStamp)
+    ? tab : { ...tab, force, external: info, deleted: false, readError: undefined, externalReadError: undefined };
+}
+
+export function receiveDiffText(tab: DiffTab, side: DiffSide, result: TextReadResult, force?: boolean): DiffTab {
+  const key = side === "left" ? "leftText" : "rightText";
+  const previous = tab.reads?.[side];
+  if (result.info && tab[key] === result.info.text && !previous?.error && previous?.force === force) return tab;
+  return {
+    ...tab,
+    [key]: result.info?.text ?? tab[key],
+    reads: { ...tab.reads, [side]: { force, error: result.error } },
+  };
+}
 
 export type PaneState = { tabs: Tab[]; active: number };
 
@@ -38,7 +98,8 @@ export const newId = () => `t${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 export const emptyPane = (): PaneState => ({ tabs: [], active: 0 });
 export const activeTab = (p: PaneState): Tab | undefined => p.tabs[p.active];
-export const isDirty = (t: Tab | undefined): boolean => !!t && t.kind === "doc" && t.content !== t.saved;
+export const isDirty = (t: Tab | undefined): boolean => !!t && t.kind === "doc" &&
+  (t.content !== t.saved || (t.savedBom !== undefined && t.savedBom !== !!t.bom));
 export const baseName = (p: string) => p.replace(/\\/g, "/").split("/").pop() ?? p;
 export const tabTitle = (t: Tab) => (t.kind === "doc" ? baseName(t.path) : `${baseName(t.left)} ↔ ${baseName(t.right)}`);
 
@@ -50,12 +111,17 @@ export type SavedTab =
       path: string;
       mode: ViewMode;
       scroll: number;
+      encoding?: string;
+      bom?: boolean;
+      force?: boolean;
       /** 未保存の編集内容（あれば） */
       draft?: string;
-      /** draft を書き始めたときのディスク上の内容。ファイルが外で変わっていたら draft は捨てる */
+      /** draft を書き始めたときのディスク上の内容 */
       draftBase?: string;
+      /** BOM を編集したときのディスク上の BOM の有無 */
+      savedBom?: boolean;
     }
-  | { kind: "diff"; left: string; right: string; scroll: number };
+  | { kind: "diff"; left: string; right: string; scroll: number; force?: Partial<Record<DiffSide, boolean>> };
 
 export type SavedPane = { tabs: SavedTab[]; active: number };
 
