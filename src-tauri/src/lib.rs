@@ -74,7 +74,11 @@ fn walk_dir(
     let mut entries: Vec<Entry> = read
         .filter_map(|e| e.ok())
         .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
+            let name = e.file_name();
+            if text_file::is_save_temp(&name) {
+                return None;
+            }
+            let name = name.to_string_lossy().into_owned();
             if SKIP_FILES.contains(&name.as_str()) {
                 return None;
             }
@@ -171,6 +175,17 @@ fn read_subtree(dir: &Path, root: &Path, max_depth: Option<usize>) -> Option<Vec
 mod tests {
     use super::{fs, walk};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn walk_skips_save_temporary_files() {
+        let root = super::text_file::tests::TempDir::new();
+        fs::write(root.0.join(".note.md.mdock-tmp-abcd"), "").unwrap();
+        fs::write(root.0.join("note.md"), "").unwrap();
+
+        let entries = walk(&root.0, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "note.md");
+    }
 
     #[test]
     fn walk_marks_unread_folders_at_max_depth() {

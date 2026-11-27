@@ -148,13 +148,14 @@ pub(crate) fn search(
         .max_filesize(Some(MAX_BYTES))
         .filter_entry(|entry| {
             entry.depth() == 0
-                || !entry.file_type().is_some_and(|kind| {
-                    kind.is_dir()
-                        && entry
-                            .file_name()
-                            .to_str()
-                            .is_some_and(|name| SKIP_DIRS.contains(&name))
-                })
+                || (!text_file::is_save_temp(entry.file_name())
+                    && !entry.file_type().is_some_and(|kind| {
+                        kind.is_dir()
+                            && entry
+                                .file_name()
+                                .to_str()
+                                .is_some_and(|name| SKIP_DIRS.contains(&name))
+                    }))
         })
         .build_parallel()
         .run(|| {

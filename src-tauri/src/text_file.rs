@@ -2,13 +2,21 @@ use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use encoding_rs::{Encoding, ISO_2022_JP, UTF_8, UTF_16BE, UTF_16LE};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::fs::{self, Metadata, OpenOptions};
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const READ_LIMIT: u64 = 5 * 1024 * 1024;
 const FORCE_LIMIT: u64 = 100 * 1024 * 1024;
+const SAVE_TEMP_MARKER: &str = ".mdock-tmp-";
+
+pub(crate) fn is_save_temp(name: &OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name.starts_with('.') && name.contains(SAVE_TEMP_MARKER)
+}
 
 #[derive(Debug, Serialize)]
 pub(crate) struct FileError {
@@ -282,42 +290,199 @@ pub(crate) fn write(
         return Err(unrepresentable());
     }
 
-    let changed = || FileError::new("changed_on_disk", "ファイルが外部で変更されました。");
+    let target = resolve_save_target(path)?;
+    replace_with(&target, &bytes, expected, File::write_all)
+}
+
+fn changed_on_disk() -> FileError {
+    FileError::new("changed_on_disk", "ファイルが外部で変更されました。")
+}
+
+fn save_metadata(path: &Path) -> io::Result<Option<Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn resolve_save_target(path: &Path) -> Result<PathBuf, FileError> {
+    let mut target = path.to_path_buf();
+    for followed in 0..=40 {
+        if !save_metadata(&target)?.is_some_and(|metadata| metadata.is_symlink()) {
+            return Ok(target);
+        }
+        if followed == 40 {
+            break;
+        }
+        let link = fs::read_link(&target)?;
+        target = target.with_file_name(link);
+    }
+    Err(FileError::other("シンボリックリンクが多すぎます。"))
+}
+
+struct SaveTemp {
+    path: PathBuf,
+    renamed: bool,
+}
+
+impl Drop for SaveTemp {
+    fn drop(&mut self) {
+        if !self.renamed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn create_save_temp(target: &Path, options: &OpenOptions) -> io::Result<(SaveTemp, File)> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let filename = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ファイル名がありません。"))?;
+    let mut prefix = OsString::from(".");
+    // 長い名前でも上限（255 バイト）を超えないよう、元の名前は先頭 100 バイトまでにする。
+    let mut short = String::new();
+    for c in filename.to_string_lossy().chars() {
+        if short.len() + c.len_utf8() > 100 {
+            break;
+        }
+        short.push(c);
+    }
+    if short.len() == filename.len() {
+        prefix.push(filename);
+    } else {
+        prefix.push(short);
+    }
+    prefix.push(SAVE_TEMP_MARKER);
+    let pid = std::process::id();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    loop {
+        let next = NEXT.fetch_add(1, Ordering::Relaxed);
+        let mut name = prefix.clone();
+        name.push(format!("{pid:x}-{now:x}-{next:x}"));
+        let path = target.with_file_name(name);
+        match options.open(&path) {
+            Ok(file) => {
+                return Ok((
+                    SaveTemp {
+                        path,
+                        renamed: false,
+                    },
+                    file,
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn replace_with(
+    target: &Path,
+    bytes: &[u8],
+    expected: Option<DiskStamp>,
+    write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+) -> Result<DiskStamp, FileError> {
+    let original = match save_metadata(target)? {
+        Some(metadata) => {
+            check_file(&metadata)?;
+            let file = open_for_overwrite(target)?;
+            let metadata = file.metadata()?;
+            check_file(&metadata)?;
+            if let Some(expected) = expected
+                && DiskStamp::from_metadata(&metadata)? != expected
+            {
+                return Err(changed_on_disk());
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if metadata.nlink() > 1 {
+                    return overwrite(file, bytes, write);
+                }
+            }
+            Some(metadata)
+        }
+        None => None,
+    };
+
     let mut options = OpenOptions::new();
-    options.write(true).truncate(false);
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if original.is_some() {
+        use std::os::unix::fs::OpenOptionsExt;
+        // 元の権限を写すまでは所有者だけが読めるようにする。
+        options.mode(0o600);
+    }
+    let (mut temp, mut file) = match create_save_temp(target, &options) {
+        Ok(created) => created,
+        // フォルダに書き込めない（ファイル自体には書ける）ときは、従来どおり直接上書きする。
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied && original.is_some() => {
+            return overwrite(open_for_overwrite(target)?, bytes, write);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    write(&mut file, bytes)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    if let Some(metadata) = &original {
+        file.set_permissions(metadata.permissions())?;
+    }
+    let stamp = DiskStamp::from_metadata(&file.metadata()?)?;
+    drop(file);
+
+    let mut linked = false;
+    if let Some(expected) = expected {
+        if original.is_some() {
+            let current = save_metadata(target)?.ok_or_else(changed_on_disk)?;
+            if !current.is_file() || DiskStamp::from_metadata(&current)? != expected {
+                return Err(changed_on_disk());
+            }
+        } else {
+            match fs::hard_link(&temp.path, target) {
+                Ok(()) => linked = true,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    return Err(changed_on_disk());
+                }
+                Err(_) if save_metadata(target)?.is_some() => return Err(changed_on_disk()),
+                Err(_) => {}
+            }
+        }
+    }
+    if !linked {
+        fs::rename(&temp.path, target)?;
+        temp.renamed = true;
+    }
+    drop(temp);
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let _ = File::open(parent).and_then(|dir| dir.sync_all());
+    Ok(stamp)
+}
+
+fn open_for_overwrite(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
     }
-    // 内容を消す前に、開いたファイル自体の状態を確認する。
-    let mut file = if let Some(expected) = expected {
-        match options.open(path) {
-            Ok(file) => {
-                let metadata = file.metadata()?;
-                check_file(&metadata)?;
-                if DiskStamp::from_metadata(&metadata)? != expected {
-                    return Err(changed());
-                }
-                file
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                match options.create_new(true).open(path) {
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                        return Err(changed());
-                    }
-                    result => result?,
-                }
-            }
-            Err(error) => return Err(error.into()),
-        }
-    } else {
-        let file = options.create(true).open(path)?;
-        check_file(&file.metadata()?)?;
-        file
-    };
+    options.open(path)
+}
+
+fn overwrite(
+    mut file: File,
+    bytes: &[u8],
+    write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+) -> Result<DiskStamp, FileError> {
     file.set_len(0)?;
-    file.write_all(&bytes)?;
+    write(&mut file, bytes)?;
     Ok(DiskStamp::from_metadata(&file.metadata()?)?)
 }
 
@@ -354,6 +519,197 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn assert_no_save_temps(dir: &Path) {
+        assert!(
+            fs::read_dir(dir)
+                .unwrap()
+                .all(|entry| !is_save_temp(&entry.unwrap().file_name()))
+        );
+    }
+
+    #[test]
+    fn replaces_contents_and_returns_current_stamp() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+
+        let stamp = write(&path, "saved", None, false, None).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"saved");
+        assert_eq!(
+            stamp,
+            DiskStamp::from_metadata(&fs::metadata(&path).unwrap()).unwrap()
+        );
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[test]
+    fn failed_partial_write_preserves_original() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+
+        let error = replace_with(&path, b"saved", None, |file, bytes| {
+            file.write_all(&bytes[..2])?;
+            Err(io::Error::other("書き込み失敗"))
+        })
+        .unwrap_err();
+
+        assert_eq!(error.code, "other");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[test]
+    fn checks_expected_again_before_replacing() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+        let expected = read(&path, false).unwrap().disk_stamp;
+
+        let error = replace_with(&path, b"saved", Some(expected), |file, bytes| {
+            file.write_all(bytes)?;
+            fs::write(&path, "changed externally")
+        })
+        .unwrap_err();
+
+        assert_eq!(error.code, "changed_on_disk");
+        assert_eq!(fs::read(&path).unwrap(), b"changed externally");
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[test]
+    fn refuses_to_overwrite_concurrently_recreated_target() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+        let expected = read(&path, false).unwrap().disk_stamp;
+        fs::remove_file(&path).unwrap();
+
+        let error = replace_with(&path, b"saved", Some(expected), |file, bytes| {
+            file.write_all(bytes)?;
+            fs::write(&path, "created externally")
+        })
+        .unwrap_err();
+
+        assert_eq!(error.code, "changed_on_disk");
+        assert_eq!(fs::read(&path).unwrap(), b"created externally");
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_existing_file_modes() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+        for mode in [0o640, 0o755] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            write(&path, "saved", None, false, None).unwrap();
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                mode
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saves_through_absolute_relative_and_dangling_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new();
+        let target = dir.0.join("note.md");
+        let absolute = dir.0.join("absolute");
+        let subdir = dir.0.join("subdir");
+        let relative = subdir.join("relative");
+        fs::create_dir(&subdir).unwrap();
+        fs::write(&target, "original").unwrap();
+        symlink(&target, &absolute).unwrap();
+        symlink("../absolute", &relative).unwrap();
+
+        write(&absolute, "saved through absolute", None, false, None).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"saved through absolute");
+        write(&relative, "saved through relative", None, false, None).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"saved through relative");
+        let expected = read(&relative, false).unwrap().disk_stamp;
+        fs::remove_file(&target).unwrap();
+        write(&relative, "recreated", None, false, Some(expected)).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"recreated");
+
+        for link in [&absolute, &relative] {
+            assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+        }
+        assert_no_save_temps(&dir.0);
+        assert_no_save_temps(&subdir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_at_most_forty_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new();
+        fs::write(dir.0.join("0"), "original").unwrap();
+        for step in 1..=41 {
+            symlink((step - 1).to_string(), dir.0.join(step.to_string())).unwrap();
+        }
+        write(&dir.0.join("40"), "saved", None, false, None).unwrap();
+        assert!(write(&dir.0.join("41"), "too far", None, false, None).is_err());
+        assert_eq!(fs::read(dir.0.join("0")).unwrap(), b"saved");
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[test]
+    fn saves_files_with_long_names() {
+        let dir = TempDir::new();
+        let path = dir.0.join(format!("{}.md", "長".repeat(80)));
+        fs::write(&path, "original").unwrap();
+        write(&path, "saved", None, false, None).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"saved");
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn falls_back_to_overwrite_when_folder_is_read_only() {
+        let dir = TempDir::new();
+        let sub = dir.0.join("locked");
+        fs::create_dir(&sub).unwrap();
+        let path = sub.join("note.md");
+        fs::write(&path, "original").unwrap();
+        fs::set_permissions(&sub, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = write(&path, "saved", None, false, None);
+        fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
+        result.unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"saved");
+        assert_no_save_temps(&sub);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saves_through_existing_hard_links() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        let link = dir.0.join("hard-link.md");
+        fs::write(&path, "original").unwrap();
+        fs::hard_link(&path, &link).unwrap();
+        let expected = read(&path, false).unwrap().disk_stamp;
+
+        write(&path, "saved", None, false, Some(expected)).unwrap();
+
+        assert_eq!(fs::read(&link).unwrap(), b"saved");
+        assert_no_save_temps(&dir.0);
+    }
+
+    #[test]
+    fn identifies_save_temporary_names() {
+        assert!(is_save_temp(OsStr::new(".note.md.mdock-tmp-123a")));
+        assert!(!is_save_temp(OsStr::new("note.md.mdock-tmp-123a")));
+        assert!(!is_save_temp(OsStr::new(".note.md.tmp-123a")));
+        assert!(!is_save_temp(OsStr::new(".mdock-tmp")));
     }
 
     #[test]
