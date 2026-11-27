@@ -515,9 +515,9 @@ button.outline-toggle:hover { color: var(--fg); }
 .split-preview:focus, .split-preview:focus-visible { outline: none; }
 
 /* 差分 */
-.diff { font-size: 12.5px; }
+.diff { display: flex; flex-direction: column; height: 100%; font-size: 12.5px; }
 .diff-head {
-  position: sticky; top: 0; z-index: 1; display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center;
+  flex-shrink: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: center;
   padding: 6px 12px; background: var(--bg-side); border-bottom: 1px solid var(--border);
 }
 .diff-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -526,15 +526,21 @@ button.outline-toggle:hover { color: var(--fg); }
 .diff-stat { color: var(--fg-muted); white-space: nowrap; }
 .diff-stat .add { color: var(--git-added); font-weight: 600; }
 .diff-stat .del { color: var(--danger); font-weight: 600; }
-.diff-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--font-mono); line-height: 1.55; }
-.diff-num { width: 44px; }
-.diff-table td { vertical-align: top; padding: 0 8px; }
-.diff-table td.num { color: var(--fg-faint); text-align: right; user-select: none; padding-right: 6px; }
-.diff-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
-.diff-table td.code + td.num { border-left: 1px solid var(--border); }
-.diff-table td.code.del { background: var(--diff-del); }
-.diff-table td.code.add { background: var(--diff-add); }
-.diff-table td.code.empty { background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--bg-hover) 4px 6px); }
+.diff-body { flex: 1; min-height: 0; overflow: auto; }
+.diff-status { padding: 12px; color: var(--fg-muted); }
+.diff-rows { position: relative; font-family: var(--font-mono); line-height: 1.55; }
+.diff-row, .diff-fold { position: absolute; top: 0; left: 0; width: 100%; }
+.diff-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr); }
+.diff-row > div { padding: 0 8px; }
+.diff-row .num { color: var(--fg-faint); text-align: right; user-select: none; padding-right: 6px; }
+.diff-row .code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-row .code + .num { border-left: 1px solid var(--border); }
+.diff-row .code.del { background: var(--diff-del); }
+.diff-row .code.add { background: var(--diff-add); }
+.diff-row .code.empty { background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--bg-hover) 4px 6px); }
+.diff-fold { padding: 0 12px; border: 0; background: var(--bg-side); color: var(--fg-muted); font: inherit; text-align: left; cursor: pointer; }
+.diff-fold:hover { background: var(--bg-hover); color: var(--fg); }
+.diff-fold:focus-visible { outline-offset: -2px; }
 
 /* 確認ダイアログ・右クリックメニュー */
 .dialog-surface {
