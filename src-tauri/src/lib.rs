@@ -173,6 +173,23 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn file_menu_accelerators_are_unique_and_close_shortcuts_are_distinct() {
+        let mut accelerators = std::collections::HashSet::new();
+        let mut close_tab = None;
+        let mut close_window = None;
+        for &(id, _, accelerator) in super::FILE_ITEMS.iter().flatten() {
+            assert!(accelerators.insert(accelerator), "{accelerator}");
+            match id {
+                "close-tab" => close_tab = Some(accelerator),
+                "close-window" => close_window = Some(accelerator),
+                _ => {}
+            }
+        }
+        assert_eq!(close_tab, Some("CmdOrCtrl+W"));
+        assert_eq!(close_window, Some("CmdOrCtrl+Shift+W"));
+    }
+
+    #[test]
     fn walk_marks_unread_folders_at_max_depth() {
         let root = super::text_file::tests::TempDir::new();
         fs::create_dir_all(root.0.join("a/b")).unwrap();
@@ -867,6 +884,20 @@ fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
 
 // ---- メニュー ----
 
+// None は区切り線。
+const FILE_ITEMS: &[Option<(&str, &str, &str)>] = &[
+    Some(("new-window", "新規ウインドウ", "CmdOrCtrl+N")),
+    Some(("open-file", "ファイルを開く…", "CmdOrCtrl+O")),
+    Some(("open-folder", "フォルダを開く…", "CmdOrCtrl+Shift+O")),
+    None,
+    Some(("save", "保存", "CmdOrCtrl+S")),
+    None,
+    Some(("print", "印刷 / PDF に書き出し…", "CmdOrCtrl+P")),
+    None,
+    Some(("close-tab", "タブを閉じる", "CmdOrCtrl+W")),
+    Some(("close-window", "ウインドウを閉じる", "CmdOrCtrl+Shift+W")),
+];
+
 /// アプリのメニュー。⌘W は「タブを閉じる」にして、画面側に知らせる。
 fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -887,42 +918,18 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .quit()
         .build()?;
-    let file = SubmenuBuilder::new(app, "ファイル")
-        .item(
-            &MenuItemBuilder::with_id("new-window", "新規ウインドウ")
-                .accelerator("CmdOrCtrl+N")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("open-file", "ファイルを開く…")
-                .accelerator("CmdOrCtrl+O")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("open-folder", "フォルダを開く…")
-                .accelerator("CmdOrCtrl+Shift+O")
-                .build(app)?,
-        )
-        .separator()
-        .item(
-            &MenuItemBuilder::with_id("save", "保存")
-                .accelerator("CmdOrCtrl+S")
-                .build(app)?,
-        )
-        .separator()
-        .item(
-            &MenuItemBuilder::with_id("print", "印刷 / PDF に書き出し…")
-                .accelerator("CmdOrCtrl+P")
-                .build(app)?,
-        )
-        .separator()
-        .item(
-            &MenuItemBuilder::with_id("close-tab", "タブを閉じる")
-                .accelerator("CmdOrCtrl+W")
-                .build(app)?,
-        )
-        .close_window_with_text("ウインドウを閉じる")
-        .build()?;
+    let mut file = SubmenuBuilder::new(app, "ファイル");
+    for &entry in FILE_ITEMS {
+        file = match entry {
+            Some((id, text, accelerator)) => file.item(
+                &MenuItemBuilder::with_id(id, text)
+                    .accelerator(accelerator)
+                    .build(app)?,
+            ),
+            None => file.separator(),
+        };
+    }
+    let file = file.build()?;
     let edit = SubmenuBuilder::new(app, "編集")
         .undo_with_text("取り消す")
         .redo_with_text("やり直す")
