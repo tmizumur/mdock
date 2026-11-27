@@ -25,6 +25,7 @@ export function useMenuActions(
       if (t) saveTab(t.id);
     },
     "close-tab": closeActiveTab,
+    "close-window": () => getCurrentWindow().close(),
     print: () => printPane(activeRef.current),
     settings: () => setSettingsOpen(true),
   };
