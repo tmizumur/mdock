@@ -9,11 +9,12 @@ export default function DiffView({ tab }: { tab: DiffTab }) {
   const { leftText, rightText } = tab;
   const [completed, setCompleted] = useState<{ leftText: string; rightText: string; result: Result }>();
   const result = completed?.leftText === leftText && completed.rightText === rightText ? completed.result : undefined;
-  const diff = result && "rows" in result ? result : undefined;
+  // 再計算の間は前の差分を出したままにする（ファイルの更新でスクロール位置が先頭に戻らないように）
+  const previous = !result && completed && "rows" in completed.result ? completed.result : undefined;
+  const diff = result && "rows" in result ? result : previous;
 
   useEffect(() => {
     let active = true;
-    setCompleted(undefined);
     const { promise, cancel } = computeDiff(leftText, rightText);
     const publish = (result: Result) => {
       if (active) setCompleted({ leftText, rightText, result });
@@ -61,7 +62,9 @@ export default function DiffView({ tab }: { tab: DiffTab }) {
 
 function DiffRows({ rows }: { rows: Row[] }) {
   const scroller = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
+  // 展開状態は、差分（rows）が変わったら空に戻す
+  const [state, setState] = useState<{ rows: Row[]; expanded: ReadonlySet<number> }>(() => ({ rows, expanded: new Set() }));
+  const expanded = useMemo(() => state.rows === rows ? state.expanded : new Set<number>(), [state, rows]);
   const items = useMemo(() => foldRows(rows, 3, expanded), [rows, expanded]);
   const getItemKey = useCallback((index: number) => {
     const item = items[index];
@@ -86,7 +89,7 @@ function DiffRows({ rows }: { rows: Row[] }) {
             return (
               <button type="button" className="diff-fold" key={key} style={style}
                 data-index={index} ref={virtualizer.measureElement}
-                onClick={() => setExpanded((current) => new Set([...current, item.id]))}>
+                onClick={() => setState({ rows, expanded: new Set([...expanded, item.id]) })}>
                 ⋯ {item.count} 行の変更なし
               </button>
             );

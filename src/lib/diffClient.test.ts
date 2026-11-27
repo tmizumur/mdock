@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { computeDiff, type DiffResponse } from "./diffClient";
+import { WORKER_LIMIT_MS, computeDiff, type DiffResponse } from "./diffClient";
 import { buildRows } from "./diffRows";
 
 class TestWorker {
@@ -84,5 +84,18 @@ describe("computeDiff", () => {
     expect(worker.terminate).toHaveBeenCalledTimes(1);
     await vi.runOnlyPendingTimersAsync();
     await expect(request.promise).resolves.toEqual(buildRows("a", "b"));
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("Worker が応答しなければ打ち切って大きすぎる扱いにする", async () => {
+    vi.stubGlobal("Worker", TestWorker);
+    vi.useFakeTimers();
+
+    const request = computeDiff("a", "b");
+    const [worker] = TestWorker.instances;
+    await vi.advanceTimersByTimeAsync(WORKER_LIMIT_MS);
+    await expect(request.promise).resolves.toEqual({ tooLarge: true });
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
   });
 });
+

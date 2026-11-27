@@ -4,6 +4,8 @@ export type DiffRequest = { id: number; a: string; b: string };
 export type DiffResponse = { id: number } & Result;
 
 let nextId = 0;
+/** diffLines の打ち切り（10 秒）に、行の組み立てとやり取りの分の余裕を足したもの */
+export const WORKER_LIMIT_MS = 15_000;
 
 function createWorker(): Worker | undefined {
   if (typeof Worker === "undefined") return;
@@ -40,7 +42,11 @@ export function computeDiff(a: string, b: string): { promise: Promise<Result>; c
     }
 
     const id = ++nextId;
+    let stopped = false;
     const stopWorker = () => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(watchdog);
       worker.onmessage = null;
       worker.onerror = null;
       worker.onmessageerror = null;
@@ -51,6 +57,8 @@ export function computeDiff(a: string, b: string): { promise: Promise<Result>; c
       clearTimeout(timer);
     };
 
+    // Worker が応答しないまま止まったら、打ち切って「大きすぎます」として扱う
+    const watchdog = setTimeout(() => finish({ tooLarge: true }), WORKER_LIMIT_MS);
     worker.onmessage = (event: MessageEvent<DiffResponse>) => {
       const { id: responseId, ...result } = event.data;
       if (responseId === id) finish(result);

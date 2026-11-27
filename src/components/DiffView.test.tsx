@@ -94,4 +94,19 @@ describe("差分表示", () => {
     expect(host.querySelector(".diff-row .code.add")?.textContent).toBe("新しい内容");
     expect(host.textContent).not.toContain("古い内容");
   });
+
+  it("ファイルが更新されて再計算する間も前の差分を出したままにする", async () => {
+    show("共通\n", "古い内容\n");
+    await finishCalculation();
+    const body = host.querySelector(".diff-body");
+
+    show("共通\n", "新しい内容\n");
+    expect(host.querySelector(".diff-body")).toBe(body);
+    expect(host.textContent).toContain("古い内容");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+
+    await finishCalculation();
+    expect(host.querySelector(".diff-body")).toBe(body);
+    expect(host.querySelector(".diff-row .code.add")?.textContent).toBe("新しい内容");
+  });
 });
