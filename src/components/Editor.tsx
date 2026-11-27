@@ -70,7 +70,7 @@ const editorTheme = EditorView.theme({
   ".cm-scroller .cm-gutters-before": { borderInlineEnd: "1px solid var(--border-soft)" },
   ".cm-gutters .cm-gutter, .cm-gutters .cm-lineNumbers": { backgroundColor: "var(--bg)", color: "var(--fg-faint)" },
   ".cm-gutters .cm-activeLineGutter": { backgroundColor: "var(--bg-elev)", color: "var(--fg)" },
-  ".cm-line": { paddingInline: "40px" },
+  ".cm-line": { paddingInlineStart: "12px", paddingInlineEnd: "24px" },
   ".cm-content .cm-activeLine": { backgroundColor: "var(--bg-elev)" },
   ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": { background: "var(--accent-soft)" },
   ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
