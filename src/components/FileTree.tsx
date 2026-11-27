@@ -13,6 +13,8 @@ type Props = {
   root: string;
   entries: Entry[];
   openPaths: string[];
+  /** 操作中のペインで表示しているファイル（ツリーの選択をこれに合わせる） */
+  activePath?: string;
   onOpen: (path: string, otherPane: boolean, newTab: boolean) => void;
   onLoadDirectory: (dir: string) => void;
   /** ファイルを作った・消したなど、ツリーを読み直してほしいとき */
@@ -52,11 +54,13 @@ export function ExplorerControls({ onCreate, onCollapse }: {
  * ファイルツリー。展開している行を平らなリストにして、見えている行だけ描く（1万ファイルでも軽い）。
  * ↑↓ で移動、→← で開閉、Enter で開く。右クリックでファイル操作。
  */
-export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirectory, onChanged, onRenamed, onError, git }: Props) {
+export default function FileTree({ root, entries, openPaths, activePath, onOpen, onLoadDirectory, onChanged, onRenamed, onError, git }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [expandTop, setExpandTop] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<string | null>(null);
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
   const [creating, setCreating] = useState<Creating | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -200,18 +204,51 @@ export default function FileTree({ root, entries, openPaths, onOpen, onLoadDirec
     } else if (ev.key === "Enter") {
       ev.preventDefault();
       if (row.entry.is_dir) toggle(row.entry, row.depth);
-      else onOpen(row.entry.path, ev.metaKey || ev.ctrlKey, ev.altKey);
+      else onOpen(row.entry.path, ev.metaKey, ev.altKey);
     } else if (ev.key === "Backspace" && ev.metaKey) {
       ev.preventDefault();
       trash(row.entry.path);
     }
   };
 
-  // 開いているファイルが変わったら、ツリーの選択も合わせる
-  const firstOpen = openPaths[0];
-  useEffect(() => {
-    if (firstOpen && document.activeElement !== scroller.current) setSelected(firstOpen);
-  }, [firstOpen]);
+  // 操作中のペインのファイルが変わったら、ツリーの選択も合わせる（親フォルダを開いて、見える位置までスクロール）
+  const reveal = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    reveal.current = null;
+    const base = norm(root).replace(/\/+$/, "");
+    const path = activePath && norm(activePath);
+    if (!activePath || !path?.startsWith(base + "/")) {
+      setSelected(null);
+      return;
+    }
+    setSelected(activePath);
+    const parents: string[] = [];
+    for (let d = dirname(path); d.length > base.length; d = dirname(d)) parents.unshift(d);
+    if (parents.length) {
+      setOpen((o) => (parents.every((d, depth) => isFolderOpen(d, depth, o, expandTop))
+        ? o : { ...o, ...Object.fromEntries(parents.map((d) => [d, true])) }));
+      // まだ読んでいないフォルダは読む（大きなフォルダの遅延読み込み）
+      const unloaded = (list: Entry[]): void => {
+        for (const e of list) {
+          if (!e.is_dir || !parents.includes(norm(e.path))) continue;
+          if (e.loaded === false) onLoadDirectory(e.path);
+          else unloaded(e.children);
+        }
+      };
+      unloaded(entriesRef.current);
+    }
+    if (!scroller.current?.contains(document.activeElement)) reveal.current = activePath;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath, root]);
+  useLayoutEffect(() => {
+    const target = reveal.current;
+    if (!target) return;
+    const i = indexOf(target);
+    if (i < 0) return; // 親フォルダの読み込みを待つ
+    reveal.current = null;
+    if (!scroller.current?.contains(document.activeElement)) virt.scrollToIndex(i, { align: "auto" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath, root, rows]);
 
   const createInSelection = (isDir: boolean) => {
     const row = rows[indexOf(selected)];

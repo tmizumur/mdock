@@ -34,7 +34,7 @@ export default function App() {
 
   const workspace = useWorkspace(ask, setError);
   const {
-    ws, wsRef, activeIdx, activeRef, order, scrolls, focusPane, updatePane, updateActiveTab,
+    ws, wsRef, activeIdx, activeRef, order, scrolls, previewScrolls, focusPane, updatePane, updateActiveTab,
     openFile, retryRead, saveTab, closeTab, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,
   } = workspace;
   const folder = useFolder(workspace, setError);
@@ -83,6 +83,7 @@ export default function App() {
         scrolls.current.set(id, top);
         schedulePersist();
       }}
+      onPreviewScroll={(id, top) => previewScrolls.current.set(id, top)}
       onFocus={() => activeRef.current !== i && focusPane(i)}
       onActivateTab={(k) => updatePane(i, (p) => ({ ...p, active: k }))}
       onCloseTab={(k) => closeTab(i, k)}
@@ -187,6 +188,7 @@ export default function App() {
                     root={root}
                     entries={tree}
                     openPaths={visiblePaths}
+                  activePath={currentTab?.kind === "doc" ? currentTab.path : undefined}
                     onOpen={onTreeOpen}
                     onLoadDirectory={loadDirectory}
                     onChanged={refreshTree}

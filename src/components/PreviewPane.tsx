@@ -12,6 +12,7 @@ type Props = {
   tab: DocTab;
   initialScroll: number;
   onScroll: (top: number) => void;
+  onScrollRestored?: (top: number) => void;
   find: FindState;
   setFind: (f: (s: FindState) => FindState) => void;
   onOutline: (outline: OutlineState) => void;
@@ -20,8 +21,10 @@ type Props = {
   scrollerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
+const restoredScrolls = new WeakSet<NonNullable<DocTab["scrollTo"]>>();
+
 /** プレビューと、右端の帯・検索バーをまとめたもの */
-export default function PreviewPane({ id, tab, initialScroll, onScroll, find, setFind, onOutline, onOpenLink, scrollerRef }: Props) {
+export default function PreviewPane({ id, tab, initialScroll, onScroll, onScrollRestored, find, setFind, onOutline, onOpenLink, scrollerRef }: Props) {
   const own = useRef<HTMLDivElement>(null);
   const body = scrollerRef ?? own;
   const [version, setVersion] = useState(0);
@@ -35,9 +38,10 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
   // タブを開いたときに前回のスクロール位置へ戻す。図や色付けで高さが変わるので少し後にもう一度。
   useLayoutEffect(() => {
     const el = body.current;
-    if (!el || !initialScroll) return;
-    el.scrollTop = initialScroll;
-    restoreTimer.current = window.setTimeout(() => (el.scrollTop = initialScroll), 300);
+    if (el && initialScroll) {
+      el.scrollTop = initialScroll;
+      restoreTimer.current = window.setTimeout(() => (el.scrollTop = initialScroll), 300);
+    }
     return cancelRestore;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -49,6 +53,23 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, find, se
     if (el && stick.current && !scrollerRef) el.scrollTop = el.scrollHeight;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
+
+  useLayoutEffect(() => {
+    const el = body.current;
+    const request = tab.scrollTo;
+    if (!el || !request || restoredScrolls.has(request)) return;
+    restoredScrolls.add(request);
+    cancelRestore();
+    el.scrollTop = request.top;
+    const restored = el.scrollTop;
+    stick.current = restored > 0 && restored + el.clientHeight >= el.scrollHeight - 8;
+    (onScrollRestored ?? onScroll)(restored);
+    if (restored < request.top) {
+      restoreTimer.current = window.setTimeout(() => {
+        if (el.scrollTop === restored) el.scrollTop = request.top;
+      }, 300);
+    }
+  }, [body, cancelRestore, onScroll, onScrollRestored, tab.scrollTo]);
 
   const scrollTo = useCallback((top: number) => {
     if (body.current) body.current.scrollTop = top;

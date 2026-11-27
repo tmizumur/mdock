@@ -17,6 +17,7 @@ import { clearFindHighlights, findRanges, setFindHighlights } from "../lib/find"
 import { handledSearchLocations, previewMatchIndex, previewSearchBlock, SEARCH_HIGHLIGHT_MS, sourceMatch } from "../lib/folderSearch";
 import type { SearchLocation } from "../lib/folderSearch";
 import { classifyLink, localLinkAction } from "../lib/links";
+import { BEFORE_JUMP } from "../lib/navHistory";
 import { FILES_CHANGED, pathKey } from "../lib/liveReload";
 import { useSettings } from "../lib/settings";
 import Lightbox, { type LightboxMedia } from "./Lightbox";
@@ -370,7 +371,12 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     const newTab = e.metaKey || e.ctrlKey;
     try {
       if (link.kind === "anchor") {
-        if (ref.current) findAnchor(ref.current, link.hash)?.scrollIntoView({ block: "start" });
+        const target = ref.current && findAnchor(ref.current, link.hash);
+        if (target) {
+          // 「戻る」で戻れるよう、移る前の位置を記録してもらう（ペインが受け取る）
+          ref.current?.dispatchEvent(new CustomEvent(BEFORE_JUMP, { bubbles: true }));
+          target.scrollIntoView({ block: "start" });
+        }
       } else if (link.kind === "external") {
         await openUrl(link.url);
       } else if (link.kind === "confirm-url") {

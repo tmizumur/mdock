@@ -910,7 +910,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 .build(app)?,
         )
         .separator()
-        .item(&MenuItemBuilder::with_id("print", "印刷 / PDF に書き出し…").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("print", "印刷 / PDF に書き出し…")
+                .accelerator("CmdOrCtrl+P")
+                .build(app)?,
+        )
         .separator()
         .item(
             &MenuItemBuilder::with_id("close-tab", "タブを閉じる")
@@ -929,12 +933,53 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .select_all_with_text("すべてを選択")
         .separator()
         .item(
+            &MenuItemBuilder::with_id("find", "ファイル内を検索")
+                .accelerator("CmdOrCtrl+F")
+                .build(app)?,
+        )
+        .item(
             &MenuItemBuilder::with_id("search-folder", "フォルダ内を検索")
                 .accelerator("CmdOrCtrl+Shift+F")
                 .build(app)?,
         )
         .build()?;
+    // ⌘[ / ⌘] はエディタの字下げ（CodeMirror）と重なるので、メニューにはキーを登録せず名前に書くだけにする
+    // （キーはアプリ側で、エディタ以外にフォーカスがあるときに受け取る）
+    let item = |id: &str, text: &str, key: Option<&str>| {
+        let b = MenuItemBuilder::with_id(id, text);
+        match key {
+            Some(k) => b.accelerator(k).build(app),
+            None => b.build(app),
+        }
+    };
     let view = SubmenuBuilder::new(app, "表示")
+        .item(&item(
+            "toggle-mode",
+            "表示 / 編集を切り替え",
+            Some("CmdOrCtrl+E"),
+        )?)
+        .separator()
+        .item(&item("back", "戻る（⌘[）", None)?)
+        .item(&item("forward", "進む（⌘]）", None)?)
+        .separator()
+        .item(&item("prev-tab", "前のタブ", Some("CmdOrCtrl+Shift+["))?)
+        .item(&item("next-tab", "次のタブ", Some("CmdOrCtrl+Shift+]"))?)
+        .separator()
+        .item(&item("split-right", "右に分割", Some("CmdOrCtrl+\\"))?)
+        .item(&item(
+            "toggle-split-rows",
+            "上下に分割 / 1 画面に戻す",
+            Some("CmdOrCtrl+Alt+\\"),
+        )?)
+        .separator()
+        .item(&item("zoom-in", "文字を大きく", Some("CmdOrCtrl+="))?)
+        .item(&item("zoom-out", "文字を小さく", Some("CmdOrCtrl+-"))?)
+        .item(&item(
+            "zoom-reset",
+            "標準の文字サイズ",
+            Some("CmdOrCtrl+0"),
+        )?)
+        .separator()
         .fullscreen_with_text("フルスクリーン")
         .build()?;
     let window = SubmenuBuilder::new(app, "ウインドウ")

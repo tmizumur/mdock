@@ -30,6 +30,7 @@ type Props = {
   /** タブごとのスクロール位置 */
   scrollOf: (tabId: string) => number;
   onScroll: (tabId: string, top: number) => void;
+  onPreviewScroll: (tabId: string, top: number) => void;
   onFocus: () => void;
   onActivateTab: (i: number) => void;
   onCloseTab: (i: number) => void;
@@ -108,7 +109,7 @@ export default function Pane(props: Props) {
   }
 
   return (
-    <section className={`pane ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} onFocusCapture={onFocus} data-pane={idx}>
+    <section className={`pane ${active ? "is-active" : ""} ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} onFocusCapture={onFocus} data-pane={idx}>
       <TabBar
         paneId={idx}
         pane={pane}
@@ -243,6 +244,7 @@ export default function Pane(props: Props) {
           onOutline={onOutline}
           initialScroll={scrollOf(tab.id)}
           onScroll={(top) => onScroll(tab.id, top)}
+          onPreviewScroll={(top) => props.onPreviewScroll(tab.id, top)}
           find={find}
           setFind={setFind}
           onSide={(side) => (splitSide.current = side)}
@@ -289,6 +291,7 @@ function SplitEditor({
   onOutline,
   initialScroll,
   onScroll,
+  onPreviewScroll,
   find,
   setFind,
   onSide,
@@ -304,6 +307,7 @@ function SplitEditor({
   onOutline: (outline: OutlineState) => void;
   initialScroll: number;
   onScroll: (top: number) => void;
+  onPreviewScroll: (top: number) => void;
 }) {
   const preview = useRef<HTMLDivElement>(null);
   // 片方を動かしたとき、もう片方のスクロールイベントで戻ってこないようにする
@@ -382,7 +386,17 @@ function SplitEditor({
           id={`pane-${idx}-split`}
           tab={tab}
           initialScroll={0}
-          onScroll={() => schedule("preview")}
+          onScroll={(top) => {
+            onPreviewScroll(top);
+            schedule("preview");
+          }}
+          onScrollRestored={(top) => {
+            onPreviewScroll(top);
+            cancelAnimationFrame(timers.current.editor.frame);
+            window.clearTimeout(timers.current.editor.settle);
+            lock.current = { by: "preview", until: performance.now() + 250 };
+            schedule("preview");
+          }}
           find={find}
           setFind={setFind}
           onOutline={onOutline}
