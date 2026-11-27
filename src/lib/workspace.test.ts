@@ -1,0 +1,30 @@
+import { describe, expect, it } from "vitest";
+import { presetLayout } from "./layout";
+import { type DocTab, emptyPane } from "./tabs";
+import { type Workspace, closeTabIn, dropIfEmpty } from "./workspace";
+
+const tab: DocTab = { kind: "doc", id: "notes", path: "/notes.md", mode: "view", content: "", saved: "" };
+
+describe("タブを閉じた後のペイン", () => {
+  it("前面のペインで最後のタブを閉じると、そのペインが消えて隣にフォーカスが移る", () => {
+    const main = { tabs: [tab], active: 0 };
+    const other = { tabs: [{ ...tab, id: "guide", path: "/guide.md" }], active: 0 };
+    const w: Workspace = {
+      layout: presetLayout("cols2", ["main", "other"]),
+      panes: { main, other },
+    };
+    expect(closeTabIn(w, "other", "guide", "other")).toEqual({
+      w: { layout: { type: "pane", id: "main" }, panes: { main } },
+      focus: "main",
+    });
+  });
+
+  it("ワークスペースに一つしかペインがなければ、空でも残す", () => {
+    const w: Workspace = {
+      layout: presetLayout("single", ["main"]),
+      panes: { main: emptyPane() },
+    };
+
+    expect(dropIfEmpty(w, "main")).toEqual({ w });
+  });
+});

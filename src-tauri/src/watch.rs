@@ -33,7 +33,11 @@ pub struct Timing {
 
 impl Default for Timing {
     fn default() -> Self {
-        Timing { quiet: Duration::from_millis(40), max: Duration::from_millis(100), health: Duration::from_millis(1000) }
+        Timing {
+            quiet: Duration::from_millis(40),
+            max: Duration::from_millis(100),
+            health: Duration::from_millis(1000),
+        }
     }
 }
 
@@ -60,7 +64,13 @@ impl Drop for FolderWatch {
 impl FolderWatch {
     /// 監視を始める。root（開いたフォルダ）は再帰的に、extra（上にある .git など）も再帰的に、
     /// files は「その親フォルダ」を再帰せずに監視する（フォルダの外で開いたファイルのため）。
-    pub fn start<F>(root: Option<PathBuf>, extra: Vec<PathBuf>, files: Vec<PathBuf>, timing: Timing, sink: F) -> Result<FolderWatch, String>
+    pub fn start<F>(
+        root: Option<PathBuf>,
+        extra: Vec<PathBuf>,
+        files: Vec<PathBuf>,
+        timing: Timing,
+        sink: F,
+    ) -> Result<FolderWatch, String>
     where
         F: Fn(Batch) + Send + 'static,
     {
@@ -107,7 +117,11 @@ fn real(p: &Path) -> PathBuf {
 pub fn map_path(aliases: &[(PathBuf, PathBuf)], p: &Path) -> PathBuf {
     for (real, given) in aliases {
         if let Ok(rest) = p.strip_prefix(real) {
-            return if rest.as_os_str().is_empty() { given.clone() } else { given.join(rest) };
+            return if rest.as_os_str().is_empty() {
+                given.clone()
+            } else {
+                given.join(rest)
+            };
         }
     }
     p.to_path_buf()
@@ -142,7 +156,7 @@ impl Inner {
             add(d);
         }
         // 長い（深い）ものから当てる
-        list.sort_by(|a, b| b.0.as_os_str().len().cmp(&a.0.as_os_str().len()));
+        list.sort_by_key(|a| std::cmp::Reverse(a.0.as_os_str().len()));
         self.aliases = list;
     }
 
@@ -155,7 +169,8 @@ impl Inner {
         })
         .map_err(|e| e.to_string())?;
         if let Some(r) = &self.root {
-            w.watch(r, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+            w.watch(r, RecursiveMode::Recursive)
+                .map_err(|e| e.to_string())?;
         }
         for e in &self.extra {
             let _ = w.watch(e, RecursiveMode::Recursive);
@@ -236,17 +251,17 @@ impl Inner {
             }
 
             let now = Instant::now();
-            if let Some(f) = first {
-                if now >= last + timing.quiet || now >= f + timing.max {
-                    let mut paths: Vec<PathBuf> = pending.drain().collect();
-                    paths.sort();
-                    if rescan {
-                        paths.clear();
-                    }
-                    sink(Batch { paths, rescan });
-                    rescan = false;
-                    first = None;
+            if let Some(f) = first
+                && (now >= last + timing.quiet || now >= f + timing.max)
+            {
+                let mut paths: Vec<PathBuf> = pending.drain().collect();
+                paths.sort();
+                if rescan {
+                    paths.clear();
                 }
+                sink(Batch { paths, rescan });
+                rescan = false;
+                first = None;
             }
 
             if now >= next_health {
@@ -285,7 +300,10 @@ mod tests {
             let p = std::env::temp_dir().join(format!(
                 "mdock-watch-{name}-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
             ));
             fs::create_dir_all(&p).unwrap();
             Tmp(p)
@@ -299,9 +317,15 @@ mod tests {
 
     fn start(root: Option<&Path>, files: Vec<PathBuf>) -> (FolderWatch, Receiver<Batch>) {
         let (tx, rx) = channel();
-        let w = FolderWatch::start(root.map(Path::to_path_buf), vec![], files, Timing::default(), move |b| {
-            let _ = tx.send(b);
-        })
+        let w = FolderWatch::start(
+            root.map(Path::to_path_buf),
+            vec![],
+            files,
+            Timing::default(),
+            move |b| {
+                let _ = tx.send(b);
+            },
+        )
         .unwrap();
         // FSEvents が動き出すまで少し待ち、始まる前のイベントを捨てる
         std::thread::sleep(Duration::from_millis(300));
@@ -314,8 +338,12 @@ mod tests {
         let t0 = Instant::now();
         let mut rest: Vec<PathBuf> = want.iter().map(|p| p.to_path_buf()).collect();
         while !rest.is_empty() {
-            let left = timeout.checked_sub(t0.elapsed()).unwrap_or_else(|| panic!("届かなかった: {rest:?}"));
-            let b = rx.recv_timeout(left).unwrap_or_else(|_| panic!("届かなかった: {rest:?}"));
+            let left = timeout
+                .checked_sub(t0.elapsed())
+                .unwrap_or_else(|| panic!("届かなかった: {rest:?}"));
+            let b = rx
+                .recv_timeout(left)
+                .unwrap_or_else(|_| panic!("届かなかった: {rest:?}"));
             if b.rescan {
                 return t0.elapsed();
             }
@@ -331,9 +359,18 @@ mod tests {
     #[test]
     fn maps_real_paths_back() {
         let aliases = vec![(PathBuf::from("/private/var/x"), PathBuf::from("/var/x"))];
-        assert_eq!(map_path(&aliases, Path::new("/private/var/x/a/b.md")), PathBuf::from("/var/x/a/b.md"));
-        assert_eq!(map_path(&aliases, Path::new("/private/var/x")), PathBuf::from("/var/x"));
-        assert_eq!(map_path(&aliases, Path::new("/other/c.md")), PathBuf::from("/other/c.md"));
+        assert_eq!(
+            map_path(&aliases, Path::new("/private/var/x/a/b.md")),
+            PathBuf::from("/var/x/a/b.md")
+        );
+        assert_eq!(
+            map_path(&aliases, Path::new("/private/var/x")),
+            PathBuf::from("/var/x")
+        );
+        assert_eq!(
+            map_path(&aliases, Path::new("/other/c.md")),
+            PathBuf::from("/other/c.md")
+        );
     }
 
     #[test]
@@ -347,10 +384,19 @@ mod tests {
         // 追記（echo >>）
         let t = Instant::now();
         use std::io::Write;
-        fs::OpenOptions::new().append(true).open(&f).unwrap().write_all(b"2").unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&f)
+            .unwrap()
+            .write_all(b"2")
+            .unwrap();
         let d = wait_for(&rx, &[&f], LIMIT);
         eprintln!("追記: {d:?}");
-        assert!(d < FAST, "追記の通知が遅い: {d:?} (送ってから {:?})", t.elapsed());
+        assert!(
+            d < FAST,
+            "追記の通知が遅い: {d:?} (送ってから {:?})",
+            t.elapsed()
+        );
 
         // 普通の上書き
         fs::write(&f, "3").unwrap();
@@ -458,7 +504,9 @@ mod tests {
         fs::write(&f, "x").unwrap();
         let t0 = Instant::now();
         loop {
-            let b = rx.recv_timeout(LIMIT.saturating_sub(t0.elapsed())).expect("戻ったあとの変更が届かない");
+            let b = rx
+                .recv_timeout(LIMIT.saturating_sub(t0.elapsed()))
+                .expect("戻ったあとの変更が届かない");
             if b.paths.contains(&f) || b.rescan {
                 break;
             }

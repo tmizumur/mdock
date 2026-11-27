@@ -129,10 +129,10 @@ export function setSizes(root: LayoutNode, splitId: string, sizes: number[]): La
 }
 
 /** 決まった形のレイアウト（リセット用）。ids の順にペインを並べる */
-export function presetLayout(kind: PresetLayout, ids: string[]): LayoutNode {
+export function presetLayout(kind: PresetLayout, ids: string[], splitId?: string): LayoutNode {
   const panes: PaneNode[] = ids.map((id) => ({ type: "pane", id }));
   if (kind === "single" || panes.length === 1) return panes[0];
-  return { type: "split", id: newNodeId("s"), dir: kind === "rows2" ? "col" : "row", children: panes, sizes: even(panes.length) };
+  return { type: "split", id: splitId ?? newNodeId("s"), dir: kind === "rows2" ? "col" : "row", children: panes, sizes: even(panes.length) };
 }
 
 /** 保存しておいたツリーを検査する（壊れていたら null） */
