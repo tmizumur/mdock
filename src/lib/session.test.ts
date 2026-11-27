@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type TextInfo, readTextResult } from "./api";
 import { restorePane } from "./session";
-import { type SavedTab, migrateSession, receiveDocText } from "./tabs";
+import { type SavedTab, isDirty, migrateSession, receiveDocText } from "./tabs";
 
 vi.mock("./api", () => ({ readTextResult: vi.fn() }));
 
 const savedTab = { path: "/note.md", mode: "edit", scroll: 0 } as const;
-const textInfo = (text: string, bom = false): TextInfo => ({ text, encoding: "UTF-8", bom, lossy: false });
+const textInfo = (text: string, bom = false): TextInfo => ({
+  text, encoding: "UTF-8", bom, lossy: false, diskStamp: { mtime: 1, size: new TextEncoder().encode(text).length + (bom ? 3 : 0) },
+});
 
 async function restoreDoc(tab: SavedTab) {
   const { tabs: [doc] } = await restorePane({ tabs: [tab], active: 0 }, new Map());
@@ -33,6 +35,25 @@ describe("下書きの復元", () => {
     vi.mocked(readTextResult).mockResolvedValue({ info: textInfo("\uFEFF保存済み", true) });
     const doc = await restoreDoc({ ...savedTab, bom: true, draft: "\uFEFF編集中", draftBase: "\uFEFF保存済み" });
     expect(doc).toMatchObject({ content: "\uFEFF編集中", saved: "\uFEFF保存済み", bom: true });
+  });
+
+  it.each([true, false])("BOM だけを変えた旧形式の下書きを未保存のまま残す（元の BOM: %s）", async (baseBom) => {
+    const info = textInfo("本文", baseBom);
+    vi.mocked(readTextResult).mockResolvedValue({ info });
+    const doc = await restoreDoc({
+      ...savedTab,
+      draftBase: baseBom ? "\uFEFF本文" : "本文",
+      draft: baseBom ? "本文" : "\uFEFF本文",
+    });
+    expect(doc).toMatchObject({ content: "本文", saved: "本文", bom: !baseBom, savedBom: baseBom, diskStamp: info.diskStamp });
+    expect(isDirty(doc)).toBe(true);
+    expect(isDirty(receiveDocText(doc, info))).toBe(true);
+
+    const restored = await restoreDoc({
+      ...savedTab, draftBase: doc.saved, draft: doc.content, bom: doc.bom, savedBom: doc.savedBom,
+    });
+    expect(isDirty(restored)).toBe(true);
+    expect(restored.bom).toBe(!baseBom);
   });
 
   it.each(["保存済み", "外部の内容", "編集中"])("復元時に開けなかったタブの下書きを残す（ディスクの本文: %s）", async (text) => {

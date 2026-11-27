@@ -3,7 +3,7 @@ import { type Layout } from "react-resizable-panels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask as askDialog } from "@tauri-apps/plugin-dialog";
 import { type useUnsavedDialog } from "../components/Dialogs";
-import { parseFileError, readTextResult, writeText } from "../lib/api";
+import { type DiskStamp, parseFileError, readTextResult, writeText } from "../lib/api";
 import { type DragItem, type DropTarget, setDropHandler, setTabCountReader } from "../lib/dnd";
 import { type PresetLayout, type Side, PRESET_COUNT, leaves, newNodeId, setSizes, splitLeaf } from "../lib/layout";
 import { createOpenRequests } from "../lib/openRequests";
@@ -170,7 +170,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   const saveTab = useCallback(async (tabId: string): Promise<boolean> => {
     const t = allTabs(wsRef.current).find((x) => x.id === tabId);
     if (!t || t.kind !== "doc") return true;
-    if (t.content === t.saved) return true;
+    if (!isDirty(t)) return true;
     if (t.readError) {
       setError("保存できませんでした。最初にファイルを読み込んでください。");
       return false;
@@ -182,34 +182,44 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
       const current = allTabs(wsRef.current).find((x) => x.id === tabId);
       if (current?.kind !== "doc" || current.path !== t.path || current.readError ||
           current.saved !== t.saved || current.encoding !== t.encoding || current.bom !== t.bom ||
+          current.savedBom !== t.savedBom || current.diskStamp !== t.diskStamp ||
           current.lossy !== t.lossy || current.external !== t.external ||
           current.externalReadError !== t.externalReadError || current.deleted !== t.deleted) return undefined;
       return current;
     };
+    const confirmOverwrite = () => askDialog("外部で変更されたファイルを上書きしますか？", {
+      title: "外部で変更されました", okLabel: "上書き", cancelLabel: "キャンセル",
+    });
+    let expected = t.externalReadError ? undefined : t.external?.diskStamp ?? t.diskStamp;
     let text: string;
+    let diskStamp: DiskStamp;
     let format = { encoding: t.encoding, bom: t.bom };
     try {
-      if ((t.external || t.externalReadError) && !await askDialog("外部で変更されたファイルを上書きしますか？", {
-        title: "外部で変更されました", okLabel: "上書き", cancelLabel: "キャンセル",
-      })) return false;
+      if ((t.external || t.externalReadError) && !await confirmOverwrite()) return false;
       if ((t.lossy || t.external?.lossy) && !await askDialog("このファイルには読み取れなかったバイトがあり、保存すると元のバイトは失われます。保存しますか？", {
         title: "読み取れなかったバイト", okLabel: "保存", cancelLabel: "キャンセル",
       })) return false;
-      const current = currentForSave();
-      if (!current) return false;
-      text = current.content;
-      try {
-        await writeText(t.path, text, format);
-      } catch (error) {
-        if (parseFileError(error).code !== "unrepresentable") throw error;
-        if (!await askDialog(`この文字は ${t.encoding} で保存できません。UTF-8 で保存しますか？`, {
-          title: "文字コードを変更", okLabel: "UTF-8 で保存", cancelLabel: "キャンセル",
-        })) return false;
+      for (;;) {
         const current = currentForSave();
         if (!current) return false;
         text = current.content;
-        format = { encoding: undefined, bom: t.bom };
-        await writeText(t.path, text, format);
+        try {
+          diskStamp = await writeText(t.path, text, format, expected);
+          break;
+        } catch (error) {
+          const { code } = parseFileError(error);
+          if (code === "changed_on_disk" && expected) {
+            if (!await confirmOverwrite()) return false;
+            expected = undefined;
+          } else if (code === "unrepresentable" && format.encoding) {
+            if (!await askDialog(`この文字は ${format.encoding} で保存できません。UTF-8 で保存しますか？`, {
+              title: "文字コードを変更", okLabel: "UTF-8 で保存", cancelLabel: "キャンセル",
+            })) return false;
+            format = { encoding: undefined, bom: t.bom };
+          } else {
+            throw error;
+          }
+        }
       }
     } catch (e) {
       setError(`保存できませんでした。 ${parseFileError(e).message}`);
@@ -217,14 +227,15 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     } finally {
       saving.current.delete(t.path);
     }
-    const clear = { ...format, lossy: undefined, external: undefined, externalReadError: undefined, deleted: false, readError: undefined };
-    const result = { info: { text, encoding: format.encoding ?? "UTF-8", bom: format.bom ?? false, lossy: false } };
+    const clear = { ...format, diskStamp, savedBom: undefined, lossy: undefined, external: undefined, externalReadError: undefined, deleted: false, readError: undefined };
+    const result = { info: { text, encoding: format.encoding ?? "UTF-8", bom: format.bom ?? false, lossy: false, diskStamp } };
     apply((w) =>
       mapTabs(w, (x): Tab => {
         if (x.kind === "doc" && x.path === t.path) {
           if (x.id === tabId) return { ...x, saved: text, ...clear };
-          if (x.content === x.saved) return { ...x, content: text, saved: text, ...clear };
-          return { ...x, saved: text, ...clear };
+          const keepBom = x.savedBom !== undefined && !!x.bom !== !!format.bom;
+          const content = x.content === x.saved ? text : x.content;
+          return { ...x, content, saved: text, ...clear, ...(keepBom ? { bom: x.bom, savedBom: !!format.bom } : {}) };
         }
         if (x.kind === "diff" && (x.left === t.path || x.right === t.path)) {
           const next = x.left === t.path ? receiveDiffText(x, "left", result, x.reads?.left?.force) : x;
@@ -233,7 +244,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         return x;
       }),
     );
-    return true;
+    return !isDirty(allTabs(wsRef.current).find((x) => x.id === tabId));
   }, [apply, setError]);
 
   /** ペインを消して（タブがなければ）、隣のペインを前面にする */

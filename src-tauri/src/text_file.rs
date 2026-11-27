@@ -1,9 +1,11 @@
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use encoding_rs::{Encoding, ISO_2022_JP, UTF_8, UTF_16BE, UTF_16LE};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fs::{self, Metadata, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 const READ_LIMIT: u64 = 5 * 1024 * 1024;
 const FORCE_LIMIT: u64 = 100 * 1024 * 1024;
@@ -60,9 +62,39 @@ impl From<io::Error> for FileError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub(crate) struct DiskStamp {
+    mtime: i64,
+    size: u64,
+}
+
+impl DiskStamp {
+    fn from_metadata(metadata: &Metadata) -> io::Result<Self> {
+        let modified = metadata.modified()?;
+        let mtime = match modified.duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_millis() as i64,
+            Err(error) => -(error.duration().as_millis() as i64),
+        };
+        Ok(Self {
+            mtime,
+            size: metadata.len(),
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct TextInfo {
     text: String,
+    encoding: &'static str,
+    bom: bool,
+    lossy: bool,
+    disk_stamp: DiskStamp,
+}
+
+#[derive(Debug)]
+struct DecodedText<'a> {
+    text: Cow<'a, str>,
     encoding: &'static str,
     bom: bool,
     lossy: bool,
@@ -127,6 +159,7 @@ pub(crate) fn read(path: &Path, force: bool) -> Result<TextInfo, FileError> {
     check_size(opened.len(), limit)?;
 
     // 開いた後にファイルが増えても上限を超えて読み込まない。
+    let disk_stamp = DiskStamp::from_metadata(&opened)?;
     let mut bytes = Vec::new();
     let mut reader = file.take(limit + 1);
     reader.read_to_end(&mut bytes)?;
@@ -134,7 +167,14 @@ pub(crate) fn read(path: &Path, force: bool) -> Result<TextInfo, FileError> {
     if size > limit {
         check_size(size.max(reader.get_ref().metadata()?.len()), limit)?;
     }
-    decode(bytes)
+    let decoded = decode(&bytes)?;
+    Ok(TextInfo {
+        text: decoded.text.into_owned(),
+        encoding: decoded.encoding,
+        bom: decoded.bom,
+        lossy: decoded.lossy,
+        disk_stamp,
+    })
 }
 
 fn detect(bytes: &[u8]) -> &'static Encoding {
@@ -143,30 +183,24 @@ fn detect(bytes: &[u8]) -> &'static Encoding {
     detector.guess(None, Utf8Detection::Deny)
 }
 
-fn decode(mut bytes: Vec<u8>) -> Result<TextInfo, FileError> {
-    let (encoding, skip) = if let Some(bom) = Encoding::for_bom(&bytes) {
+fn decode(bytes: &[u8]) -> Result<DecodedText<'_>, FileError> {
+    let (encoding, skip) = if let Some(bom) = Encoding::for_bom(bytes) {
         bom
     } else {
-        match String::from_utf8(bytes) {
+        match std::str::from_utf8(bytes) {
             // ISO-2022-JP のエスケープ列も UTF-8 として有効。
             Ok(text)
                 if !text.as_bytes().contains(&0x1b) || detect(text.as_bytes()) != ISO_2022_JP =>
             {
-                return Ok(TextInfo {
-                    text,
+                return Ok(DecodedText {
+                    text: Cow::Borrowed(text),
                     encoding: UTF_8.name(),
                     bom: false,
                     lossy: false,
                 });
             }
-            Ok(text) => {
-                bytes = text.into_bytes();
-                (ISO_2022_JP, 0)
-            }
-            Err(error) => {
-                bytes = error.into_bytes();
-                (detect(&bytes), 0)
-            }
+            Ok(_) => (ISO_2022_JP, 0),
+            Err(_) => (detect(bytes), 0),
         }
     };
     let (text, had_errors) = encoding.decode_without_bom_handling(&bytes[skip..]);
@@ -184,8 +218,8 @@ fn decode(mut bytes: Vec<u8>) -> Result<TextInfo, FileError> {
             ));
         }
     }
-    Ok(TextInfo {
-        text: text.into_owned(),
+    Ok(DecodedText {
+        text,
         encoding: encoding.name(),
         bom: skip != 0,
         lossy: had_errors,
@@ -197,18 +231,26 @@ pub(crate) fn write(
     text: &str,
     encoding: Option<&str>,
     bom: bool,
-) -> Result<(), FileError> {
+    expected: Option<DiskStamp>,
+) -> Result<DiskStamp, FileError> {
     let encoding = match encoding {
         Some(name) => Encoding::for_label_no_replacement(name.as_bytes()).ok_or_else(|| {
             FileError::new("other", format!("未対応の文字コードです（{name}）。"))
         })?,
         None => UTF_8,
     };
-    let mut bytes = Vec::new();
+    let unrepresentable = || {
+        FileError::new(
+            "unrepresentable",
+            format!("この文字は {} で保存できません。", encoding.name()),
+        )
+    };
+    let mut buffer = Vec::new();
+    let bytes;
     if encoding == UTF_16LE || encoding == UTF_16BE {
         let little_endian = encoding == UTF_16LE;
         if bom {
-            bytes.extend(if little_endian {
+            buffer.extend(if little_endian {
                 [0xff, 0xfe]
             } else {
                 [0xfe, 0xff]
@@ -216,30 +258,67 @@ pub(crate) fn write(
         }
         // encoding_rs の encode は UTF-16 を指定すると UTF-8 を返す。
         for unit in text.encode_utf16() {
-            bytes.extend(if little_endian {
+            buffer.extend(if little_endian {
                 unit.to_le_bytes()
             } else {
                 unit.to_be_bytes()
             });
         }
+        bytes = Cow::Owned(buffer);
     } else {
         let (encoded, _, had_errors) = encoding.encode(text);
-        if had_errors
-            || (encoding != UTF_8 && encoding.decode_without_bom_handling(&encoded).0 != text)
-        {
-            return Err(FileError::new(
-                "unrepresentable",
-                format!("この文字は {} で保存できません。", encoding.name()),
-            ));
+        if had_errors {
+            return Err(unrepresentable());
         }
         if encoding == UTF_8 && bom {
-            bytes.extend([0xef, 0xbb, 0xbf]);
+            buffer.extend([0xef, 0xbb, 0xbf]);
+            buffer.extend_from_slice(&encoded);
+            bytes = Cow::Owned(buffer);
         } else {
-            return fs::write(path, encoded).map_err(FileError::from);
+            bytes = encoded;
         }
-        bytes.extend_from_slice(&encoded);
     }
-    fs::write(path, bytes).map_err(FileError::from)
+    if !decode(&bytes).is_ok_and(|decoded| decoded.text == text) {
+        return Err(unrepresentable());
+    }
+
+    let changed = || FileError::new("changed_on_disk", "ファイルが外部で変更されました。");
+    let mut options = OpenOptions::new();
+    options.write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    // 内容を消す前に、開いたファイル自体の状態を確認する。
+    let mut file = if let Some(expected) = expected {
+        match options.open(path) {
+            Ok(file) => {
+                let metadata = file.metadata()?;
+                check_file(&metadata)?;
+                if DiskStamp::from_metadata(&metadata)? != expected {
+                    return Err(changed());
+                }
+                file
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match options.create_new(true).open(path) {
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        return Err(changed());
+                    }
+                    result => result?,
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        let file = options.create(true).open(path)?;
+        check_file(&file.metadata()?)?;
+        file
+    };
+    file.set_len(0)?;
+    file.write_all(&bytes)?;
+    Ok(DiskStamp::from_metadata(&file.metadata()?)?)
 }
 
 #[cfg(test)]
@@ -290,7 +369,7 @@ pub(crate) mod tests {
             assert_eq!(info.text, text);
             assert_eq!(info.encoding, encoding.name());
             assert!(!info.bom);
-            write(&path, &info.text, Some(info.encoding), info.bom).unwrap();
+            write(&path, &info.text, Some(info.encoding), info.bom, None).unwrap();
             assert_eq!(&fs::read(&path).unwrap()[..], bytes.as_ref());
         }
     }
@@ -310,7 +389,7 @@ pub(crate) mod tests {
                 (info.text.as_str(), info.encoding, info.bom),
                 ("日😀", encoding, true)
             );
-            write(&path, &info.text, Some(info.encoding), info.bom).unwrap();
+            write(&path, &info.text, Some(info.encoding), info.bom, None).unwrap();
             assert_eq!(fs::read(&path).unwrap(), bytes);
         }
     }
@@ -323,7 +402,7 @@ pub(crate) mod tests {
         fs::write(&path, bytes).unwrap();
         assert_eq!(read(&path, false).unwrap_err().code, "invalid_encoding");
         assert_eq!(
-            write(&path, "😀", Some("Shift_JIS"), false)
+            write(&path, "😀", Some("Shift_JIS"), false, None)
                 .unwrap_err()
                 .code,
             "unrepresentable"
@@ -336,14 +415,10 @@ pub(crate) mod tests {
         let mut bytes = b"\xef\xbb\xbf".to_vec();
         bytes.extend([b'a'; 99]);
         bytes.push(0xff);
-        let info = decode(bytes).unwrap();
+        let info = decode(&bytes).unwrap();
         assert!(info.lossy);
         assert!(info.text.ends_with('\u{fffd}'));
-        assert!(
-            !decode("本文中の\u{fffd}".as_bytes().to_vec())
-                .unwrap()
-                .lossy
-        );
+        assert!(!decode("本文中の\u{fffd}".as_bytes()).unwrap().lossy);
     }
 
     #[test]
@@ -353,12 +428,58 @@ pub(crate) mod tests {
         let original = b"original";
         fs::write(&path, original).unwrap();
         assert_eq!(
-            write(&path, "100 ¥", Some("Shift_JIS"), false)
+            write(&path, "100 ¥", Some("Shift_JIS"), false, None)
                 .unwrap_err()
                 .code,
             "unrepresentable"
         );
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn rejects_shift_jis_that_is_read_as_different_utf8_text() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        let original = b"original";
+        fs::write(&path, original).unwrap();
+        assert_eq!(
+            write(&path, "ﾂｩ", Some("Shift_JIS"), false, None)
+                .unwrap_err()
+                .code,
+            "unrepresentable"
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn checks_both_disk_stamp_fields_before_writing() {
+        let dir = TempDir::new();
+        let path = dir.0.join("note.md");
+        fs::write(&path, "original").unwrap();
+        let stamp = read(&path, false).unwrap().disk_stamp;
+        for expected in [
+            DiskStamp {
+                mtime: stamp.mtime - 1,
+                ..stamp
+            },
+            DiskStamp {
+                size: stamp.size + 1,
+                ..stamp
+            },
+        ] {
+            assert_eq!(
+                write(&path, "edited", None, false, Some(expected))
+                    .unwrap_err()
+                    .code,
+                "changed_on_disk"
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"original");
+        }
+        let saved = write(&path, "edited", None, false, Some(stamp)).unwrap();
+        assert_eq!(read(&path, false).unwrap().disk_stamp, saved);
+        fs::remove_file(&path).unwrap();
+        write(&path, "restored", None, false, Some(saved)).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"restored");
     }
 
     #[test]

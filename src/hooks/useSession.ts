@@ -67,7 +67,7 @@ export function usePersist(
         encoding: t.encoding,
         bom: t.bom ?? false,
         force: t.force,
-        ...(t.content !== t.saved ? { draft: t.content, draftBase: t.saved } : {}),
+        ...(isDirty(t) ? { draft: t.content, draftBase: t.saved, savedBom: t.savedBom } : {}),
       };
     };
     const w = wsRef.current;
@@ -126,7 +126,9 @@ export function usePersist(
         }
     } else {
       // 保存しない: 編集内容を捨ててから状態を書き出す（次に開いたとき復元しない）
-      apply((w) => mapPanes(w, (p) => ({ ...p, tabs: p.tabs.map((t) => (t.kind === "doc" ? { ...t, content: t.saved } : t)) })));
+      apply((w) => mapPanes(w, (p) => ({ ...p, tabs: p.tabs.map((t) =>
+        t.kind === "doc" ? { ...t, content: t.saved, bom: t.savedBom ?? t.bom, savedBom: undefined } : t,
+      ) })));
     }
     await flush();
     await getCurrentWindow().destroy();

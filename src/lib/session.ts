@@ -30,16 +30,20 @@ async function restoreTab(t: SavedTab, scrolls: Map<string, number>): Promise<Ta
   let draftBase = typeof t.draftBase === "string" ? t.draftBase : undefined;
   let draft = typeof t.draft === "string" ? t.draft : undefined;
   let bom = t.bom;
+  let savedBom = typeof t.savedBom === "boolean" && t.savedBom !== !!bom ? t.savedBom : undefined;
   // 旧形式では BOM がディスクの本文と下書きの先頭に含まれていた。
-  if (bom === undefined && t.encoding === undefined && draftBase?.startsWith("\uFEFF")) {
-    draftBase = draftBase.slice(1);
+  if (bom === undefined && t.encoding === undefined && draftBase !== undefined) {
+    const baseBom = draftBase.startsWith("\uFEFF");
+    const draftBom = draft?.startsWith("\uFEFF") ?? baseBom;
+    draftBase = draftBase.replace(/^\uFEFF/, "");
     draft = draft?.replace(/^\uFEFF/, "");
-    bom = true;
+    bom = draftBom || (baseBom ? false : undefined);
+    if (baseBom !== draftBom) savedBom = baseBom;
   }
   const saved = draftBase ?? info?.text ?? "";
   const tab: DocTab = {
     id, kind: "doc", path: t.path, content: draft ?? saved, saved, mode: t.mode ?? "view",
-    encoding: t.encoding, bom, force, readError: error,
+    encoding: t.encoding, bom, savedBom, force, readError: error,
   };
   return info ? receiveDocText(tab, info) : tab;
 }

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
-use text_file::{FileError, TextInfo};
+use text_file::{DiskStamp, FileError, TextInfo};
 
 /// フォルダツリーの1要素
 #[derive(Serialize)]
@@ -369,13 +369,15 @@ async fn write_text(
     content: String,
     encoding: Option<String>,
     bom: Option<bool>,
-) -> Result<(), FileError> {
+    expected: Option<DiskStamp>,
+) -> Result<DiskStamp, FileError> {
     tauri::async_runtime::spawn_blocking(move || {
         text_file::write(
             Path::new(&path),
             &content,
             encoding.as_deref(),
             bom.unwrap_or(false),
+            expected,
         )
     })
     .await

@@ -6,7 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type TextReadResult, readTextResult, writeText } from "../lib/api";
-import { activeTab } from "../lib/tabs";
+import { activeTab, isDirty } from "../lib/tabs";
 import { useFolder } from "./useFolder";
 import { useLiveReload } from "./useLiveReload";
 import { useWorkspace } from "./useWorkspace";
@@ -21,8 +21,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
 const setError = vi.fn();
 const askUnsaved = vi.fn();
+const originalStamp = { mtime: 1, size: 12 };
+const savedStamp = { mtime: 2, size: 9 };
 const success = (text: string, lossy = false): TextReadResult => ({
-  info: { text, encoding: "UTF-8", bom: false, lossy },
+  info: { text, encoding: "UTF-8", bom: false, lossy, diskStamp: originalStamp },
 });
 const readError = { code: "invalid_encoding", message: "文字コードを判定できません。" } as const;
 
@@ -60,6 +62,7 @@ describe("ワークスペースの読み込みと保存", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.resetAllMocks();
     vi.mocked(listen).mockResolvedValue(() => {});
+    vi.mocked(writeText).mockResolvedValue(savedStamp);
     view = createRoot(document.createElement("div"));
     act(() => view.render(<Harness />));
   });
@@ -117,5 +120,34 @@ describe("ワークスペースの読み込みと保存", () => {
     expect(writeText).toHaveBeenCalledOnce();
     expect(activeDoc().lossy).toBeUndefined();
     expect(activeDoc().saved).toBe("編集中");
+  });
+
+  it("監視通知より前に外部変更があれば、承認した場合だけ上書きする", async () => {
+    const id = await editFile();
+    const changed = { code: "changed_on_disk" };
+    vi.mocked(writeText).mockRejectedValueOnce(changed).mockRejectedValueOnce(changed);
+    vi.mocked(ask).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await act(async () => { expect(await workspace.saveTab(id)).toBe(false); });
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText).toHaveBeenLastCalledWith("/note.md", "編集中", expect.any(Object), originalStamp);
+    expect(isDirty(activeDoc())).toBe(true);
+
+    await act(async () => { expect(await workspace.saveTab(id)).toBe(true); });
+    expect(ask).toHaveBeenLastCalledWith("外部で変更されたファイルを上書きしますか？", expect.any(Object));
+    expect(writeText).toHaveBeenNthCalledWith(2, "/note.md", "編集中", expect.any(Object), originalStamp);
+    expect(writeText).toHaveBeenNthCalledWith(3, "/note.md", "編集中", expect.any(Object), undefined);
+    expect(activeDoc()).toMatchObject({ saved: "編集中", diskStamp: savedStamp });
+  });
+
+  it("本文が同じでも、BOM を取り除く下書きを保存する", async () => {
+    const id = await editFile();
+    act(() => workspace.updateActiveTab("p0", (tab) =>
+      tab.kind === "doc" ? { ...tab, content: tab.saved, bom: false, savedBom: true } : tab,
+    ));
+
+    await act(async () => { expect(await workspace.saveTab(id)).toBe(true); });
+    expect(writeText).toHaveBeenCalledWith("/note.md", "保存済み", { encoding: undefined, bom: false }, originalStamp);
+    expect(isDirty(activeDoc())).toBe(false);
   });
 });

@@ -1,15 +1,18 @@
 /** ペインとタブの状態、セッション（session.json）の形式と移行 */
 
 import { type LayoutNode, type PresetLayout, PRESET_COUNT, leaves as leavesOf, presetLayout, validLayout } from "./layout";
-import type { FileError, TextFormat, TextInfo, TextReadResult } from "./api";
+import type { DiskStamp, FileError, TextFormat, TextInfo, TextReadResult } from "./api";
 
 export type ViewMode = "view" | "edit" | "split";
 
-export const textFormat = (info: TextInfo): TextFormat & { lossy?: boolean } => ({
+export const textFormat = (info: TextInfo): TextFormat & { lossy?: boolean; diskStamp: DiskStamp } => ({
   encoding: info.encoding === "UTF-8" ? undefined : info.encoding,
   bom: info.bom || undefined,
   lossy: info.lossy || undefined,
+  diskStamp: info.diskStamp,
 });
+
+const sameStamp = (a: DiskStamp | undefined, b: DiskStamp) => a?.mtime === b.mtime && a.size === b.size;
 
 export type DocTab = {
   id: string;
@@ -21,6 +24,9 @@ export type DocTab = {
   mode: ViewMode;
   encoding?: string;
   bom?: boolean;
+  /** BOM を編集した下書きの比較元 */
+  savedBom?: boolean;
+  diskStamp?: DiskStamp;
   lossy?: boolean;
   force?: boolean;
   readError?: FileError;
@@ -53,16 +59,24 @@ export function receiveDocText(tab: DocTab, info: TextInfo, force = tab.force): 
   const { text } = info;
   const format = textFormat(info);
   const clear = { ...format, force, deleted: false, readError: undefined, external: undefined, externalReadError: undefined };
+  const bomEdited = tab.savedBom !== undefined && tab.savedBom !== !!tab.bom;
+  const sameBaseBom = bomEdited ? tab.savedBom === info.bom : tab.bom === format.bom;
   const settled = !tab.deleted && !tab.readError && !tab.external && !tab.externalReadError && tab.force === force &&
-    tab.encoding === format.encoding && tab.bom === format.bom && tab.lossy === format.lossy;
+    tab.encoding === format.encoding && sameBaseBom && tab.lossy === format.lossy &&
+    sameStamp(tab.diskStamp, info.diskStamp);
   if (!isDirty(tab)) {
     return text === tab.saved && settled ? tab : { ...tab, ...clear, content: text, saved: text };
   }
-  if (text === tab.content && !tab.readError) return { ...tab, ...clear, saved: text };
-  if (text === tab.saved) return settled ? tab : { ...tab, ...clear };
+  if (text === tab.content && !tab.readError && (!bomEdited || info.bom === !!tab.bom)) {
+    return { ...tab, ...clear, saved: text, savedBom: undefined };
+  }
+  if (text === tab.saved && (!bomEdited || info.bom === tab.savedBom)) {
+    return settled ? tab : { ...tab, ...clear, bom: bomEdited ? tab.bom : format.bom };
+  }
   const external = tab.external;
   return !tab.deleted && !tab.readError && !tab.externalReadError && tab.force === force && external?.text === text &&
-    external.encoding === info.encoding && external.bom === info.bom && external.lossy === info.lossy
+    external.encoding === info.encoding && external.bom === info.bom && external.lossy === info.lossy &&
+    sameStamp(external.diskStamp, info.diskStamp)
     ? tab : { ...tab, force, external: info, deleted: false, readError: undefined, externalReadError: undefined };
 }
 
@@ -84,7 +98,8 @@ export const newId = () => `t${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 export const emptyPane = (): PaneState => ({ tabs: [], active: 0 });
 export const activeTab = (p: PaneState): Tab | undefined => p.tabs[p.active];
-export const isDirty = (t: Tab | undefined): boolean => !!t && t.kind === "doc" && t.content !== t.saved;
+export const isDirty = (t: Tab | undefined): boolean => !!t && t.kind === "doc" &&
+  (t.content !== t.saved || (t.savedBom !== undefined && t.savedBom !== !!t.bom));
 export const baseName = (p: string) => p.replace(/\\/g, "/").split("/").pop() ?? p;
 export const tabTitle = (t: Tab) => (t.kind === "doc" ? baseName(t.path) : `${baseName(t.left)} ↔ ${baseName(t.right)}`);
 
@@ -103,6 +118,8 @@ export type SavedTab =
       draft?: string;
       /** draft を書き始めたときのディスク上の内容 */
       draftBase?: string;
+      /** BOM を編集したときのディスク上の BOM の有無 */
+      savedBom?: boolean;
     }
   | { kind: "diff"; left: string; right: string; scroll: number; force?: Partial<Record<DiffSide, boolean>> };
 

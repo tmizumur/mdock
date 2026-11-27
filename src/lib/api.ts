@@ -8,7 +8,8 @@ export type Entry = {
   loaded?: boolean;
 };
 
-export type TextInfo = { text: string; encoding: string; bom: boolean; lossy: boolean };
+export type DiskStamp = { mtime: number; size: number };
+export type TextInfo = { text: string; encoding: string; bom: boolean; lossy: boolean; diskStamp: DiskStamp };
 export type TextFormat = { encoding?: string; bom?: boolean };
 const fileErrorMessages = {
   not_found: "ファイルが見つかりません。",
@@ -19,6 +20,7 @@ const fileErrorMessages = {
   too_large: "ファイルが大きすぎます（上限は 100 MB です）。",
   invalid_encoding: "文字コードを判定できません。",
   unrepresentable: "指定した文字コードで保存できない文字があります。",
+  changed_on_disk: "ファイルが外部で変更されました。",
   other: "ファイルの操作中にエラーが発生しました。",
 };
 export type FileError = { code: keyof typeof fileErrorMessages; message: string; size?: number };
@@ -39,8 +41,8 @@ export function parseFileError(error: unknown): FileError {
 export const readTree = (root: string, maxDepth?: number) => invoke<Entry[]>("read_tree", { root, maxDepth });
 export const readTextInfo = (path: string, force = false) => invoke<TextInfo>("read_text", { path, force });
 export const readText = async (path: string) => (await readTextInfo(path)).text;
-export const writeText = (path: string, content: string, format: TextFormat = {}) =>
-  invoke<void>("write_text", { path, content, ...format });
+export const writeText = (path: string, content: string, format: TextFormat = {}, expected?: DiskStamp) =>
+  invoke<DiskStamp>("write_text", { path, content, ...format, expected });
 
 export type TextReadResult = { info: TextInfo; error?: undefined } | { info?: undefined; error: FileError };
 export async function readTextResult(path: string, force = false): Promise<TextReadResult> {

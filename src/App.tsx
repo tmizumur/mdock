@@ -83,10 +83,17 @@ export default function App() {
       }}
       onReloadExternal={() =>
         updateActiveTab(i, (t) =>
-          t.kind === "doc" && t.external ? { ...t, ...textFormat(t.external), content: t.external.text, saved: t.external.text, external: undefined } : t,
+          t.kind === "doc" && t.external ? { ...t, ...textFormat(t.external), content: t.external.text, saved: t.external.text, savedBom: undefined, external: undefined } : t,
         )
       }
-      onKeepMine={() => updateActiveTab(i, (t) => (t.kind === "doc" && t.external ? { ...t, ...textFormat(t.external), saved: t.external.text, external: undefined } : t))}
+      onKeepMine={() => updateActiveTab(i, (t) => {
+        if (t.kind !== "doc" || !t.external) return t;
+        const format = textFormat(t.external);
+        return {
+          ...t, ...format, saved: t.external.text, external: undefined,
+          ...(t.savedBom !== undefined ? { bom: t.bom, savedBom: t.external.bom === !!t.bom ? undefined : t.external.bom } : {}),
+        };
+      })}
       onOpenLink={(p, anchor, newTab) => openFile(p, i, { anchor, newTab })}
       onPrint={() => printPane(i)}
       printTarget={activeIdx === i}

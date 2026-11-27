@@ -110,7 +110,8 @@ export function useLiveReload(
           if (prior.kind !== "doc" || prior.path !== t.path || prior.saved !== t.saved ||
               prior.readError !== t.readError || prior.external !== t.external ||
               prior.externalReadError !== t.externalReadError || prior.encoding !== t.encoding ||
-              prior.bom !== t.bom || prior.lossy !== t.lossy) return t;
+              prior.bom !== t.bom || prior.savedBom !== t.savedBom || prior.diskStamp !== t.diskStamp ||
+              prior.lossy !== t.lossy) return t;
           const result = resultFor(t.path);
           const force = forced.has(t.path) || undefined;
           if (!result) return t;
