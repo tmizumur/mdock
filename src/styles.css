@@ -1,29 +1,32 @@
 :root {
-  --bg: #0F1012;
-  --bg-side: #141518;
-  --bg-elev: #1C1E22;
-  --bg-hover: #2A2D33;
-  --bg-code: #15161A;
-  --border: #25272C;
-  --border-soft: #1D1F23;
-  --fg: #E7E8EB;
-  --fg-muted: #A4A8B0;
-  --fg-faint: #8B9099;
-  --accent: #8AA4FF;
-  --accent-soft: rgba(138, 164, 255, 0.12);
+  --bg: #22262B;
+  --bg-side: #2D3138;
+  --bg-elev: #383D45;
+  --bg-hover: #444A53;
+  --bg-code: #30343A;
+  --border: #4C525C;
+  --border-soft: #393E45;
+  --fg: #F5F6F8;
+  --fg-muted: #C8D0DB;
+  --fg-faint: #AAB4C3;
+  --accent: #A2CAFF;
+  --accent-soft: rgba(162, 202, 255, 0.16);
   --scrollbar-thumb: color-mix(in srgb, var(--fg-faint) 45%, transparent);
-  --tree-selected: rgba(138, 164, 255, 0.14);
-  --git-modified: #E5C07B;
-  --git-added: #7FD39A;
-  --danger: #F48771;
-  --code-keyword: #C3A6FF;
-  --code-string: #9FD8A8;
+  --tree-selected: #353F4F;
+  --git-modified: #F3CF8D;
+  --git-added: #A3E4B7;
+  --danger: #FFB9AA;
+  --code-keyword: #DDC3FF;
+  --code-function: #A2CAFF;
+  --code-string: #B9E7BB;
+  --code-comment: #C1CAD6;
+  --code-number: #F3CF8D;
 
   --find: color-mix(in srgb, var(--accent) 32%, transparent);
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   --dialog-shadow: 0 24px 80px rgba(0, 0, 0, 0.68), 0 8px 24px rgba(0, 0, 0, 0.36);
-  --diff-add: rgba(127, 211, 154, 0.16);
-  --diff-del: rgba(244, 135, 113, 0.16);
+  --diff-add: rgba(163, 228, 183, 0.16);
+  --diff-del: rgba(255, 185, 170, 0.16);
 
   --font-ui: -apple-system, "SF Pro", "Hiragino Sans", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -613,7 +616,7 @@ body.dragging-item, body.dragging-item * { cursor: grabbing !important; user-sel
 .status-modified { color: var(--git-modified); }
 .status-branch, .status-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .status-branch { max-width: 18%; }
-.status-path { direction: rtl; text-align: left; }
+.status-path { direction: rtl; text-align: left; font-size: 12px; color: var(--fg-muted); }
 
 /* 印刷 / PDF に書き出し: 選んだペインのプレビュー本文だけを紙面用の配色で */
 @media print {

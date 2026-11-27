@@ -28,27 +28,27 @@ export function loadHighlighter(): Promise<HighlighterGeneric<string, string>> {
           ...dark,
           name: "mdock-dark",
           // Shiki は CSS 変数を解決できないため、styles.css の --bg-code / --fg と同じ値を指定する。
-          colors: { ...dark.colors, "editor.background": "#15161A", "editor.foreground": "#E7E8EB" },
+          colors: { ...dark.colors, "editor.background": "#30343A", "editor.foreground": "#F5F6F8" },
           tokenColors: dark.tokenColors?.map((rule) => ({
             ...rule,
             settings: {
               ...rule.settings,
               foreground: ({
-                "#F97583": "#C3A6FF", // --code-keyword
-                "#B392F0": "#8AA4FF", // --accent
-                "#9ECBFF": "#9FD8A8", // --code-string
-                "#6A737D": "#A4A8B0", // --fg-muted
-                "#79B8FF": "#8AA4FF", // --accent
-                "#85E89D": "#7FD39A", // --git-added
-                "#FFAB70": "#E5C07B", // --git-modified
-                "#FDAEB7": "#F48771", // --danger
-                "#E1E4E8": "#E7E8EB", // --fg
-                "#DBEDFF": "#E7E8EB", // --fg
-                "#D1D5DA": "#A4A8B0", // --fg-muted
+                "#F97583": "#DDC3FF", // --code-keyword
+                "#B392F0": "#A2CAFF", // --code-function
+                "#9ECBFF": "#B9E7BB", // --code-string
+                "#6A737D": "#C1CAD6", // --code-comment
+                "#79B8FF": "#A2CAFF", // --accent
+                "#85E89D": "#A3E4B7", // --git-added
+                "#FFAB70": "#F3CF8D", // --code-number
+                "#FDAEB7": "#FFB9AA", // --danger
+                "#E1E4E8": "#F5F6F8", // --fg
+                "#DBEDFF": "#F5F6F8", // --fg
+                "#D1D5DA": "#C8D0DB", // --fg-muted
               } as Record<string, string>)[rule.settings.foreground?.toUpperCase() ?? ""] ?? rule.settings.foreground,
               background: ({
-                "#86181D": "#F4877129", // --diff-del (--danger, 16%)
-                "#C24E00": "#E5C07B29", // --git-modified, 16%
+                "#86181D": "#FFB9AA29", // --diff-del (--danger, 16%)
+                "#C24E00": "#F3CF8D29", // --code-number, 16%
               } as Record<string, string>)[rule.settings.background?.toUpperCase() ?? ""] ?? rule.settings.background,
             },
           })),
