@@ -32,6 +32,9 @@ export function useShortcuts(
         // ⌘⇧[ / ⌘⇧] でタブを移動
         e.preventDefault();
         cycleTab(k === "[" || k === "{" ? -1 : 1);
+      } else if (k === "f" && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        if (!e.repeat) actions.current["search-folder"]();
       } else if (k === "f" && !e.shiftKey) {
         // CodeMirror が自分で処理した場合（エディタにフォーカスがある）は何もしない
         if (e.defaultPrevented) return;

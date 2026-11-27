@@ -66,6 +66,8 @@ export default function Pane(props: Props) {
     : [];
   const editor = useRef<EditorHandle>(null);
   const [find, setFind] = useState<FindState>({ open: false, query: "", index: 0, focus: 0 });
+  /** 「並べて」で最後に触った側（⌘F をどちらの検索にするか） */
+  const splitSide = useRef<"editor" | "preview">("editor");
   const [reported, setReported] = useState<{ tabId: string; mode: ViewMode; outline: OutlineState }>();
   const tabId = doc?.readError ? undefined : doc?.id;
   const mode = doc?.mode;
@@ -80,11 +82,13 @@ export default function Pane(props: Props) {
     if (active && tabId && mode && outline) publishOutline({ paneId: idx, tabId, mode, outline });
   }, [active, idx, tabId, mode, outline, publishOutline]);
 
-  // ⌘F: 表示中はプレビュー内検索、編集中は CodeMirror の検索
+  // ⌘F: 表示中はプレビュー内検索、編集中は CodeMirror の検索。
+  // 「並べて」ではプレビュー側を最後に触っていればプレビュー内検索（エディタにフォーカスがあれば CodeMirror が先に受け取る）
   useEffect(() => {
     if (!command || command.type !== "find" || !doc || doc.readError) return;
-    if (doc.mode === "view") setFind((f) => ({ ...f, open: true, focus: f.focus + 1 }));
-    else editor.current?.openSearch();
+    if (doc.mode === "view" || (doc.mode === "split" && splitSide.current === "preview")) {
+      setFind((f) => ({ ...f, open: true, focus: f.focus + 1 }));
+    } else editor.current?.openSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [command?.n]);
 
@@ -104,7 +108,7 @@ export default function Pane(props: Props) {
   }
 
   return (
-    <section className={`pane ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} data-pane={idx}>
+    <section className={`pane ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} onFocusCapture={onFocus} data-pane={idx}>
       <TabBar
         paneId={idx}
         pane={pane}
@@ -218,6 +222,7 @@ export default function Pane(props: Props) {
                 key={tab.id}
                 ref={editor}
                 value={tab.content}
+                searchLocation={tab.line}
                 headings={editHeadings}
                 onOutline={onOutline}
                 onChange={onChange}
@@ -238,6 +243,9 @@ export default function Pane(props: Props) {
           onOutline={onOutline}
           initialScroll={scrollOf(tab.id)}
           onScroll={(top) => onScroll(tab.id, top)}
+          find={find}
+          setFind={setFind}
+          onSide={(side) => (splitSide.current = side)}
         />
       )}
       <DropOverlay paneId={idx} />
@@ -281,9 +289,15 @@ function SplitEditor({
   onOutline,
   initialScroll,
   onScroll,
+  find,
+  setFind,
+  onSide,
 }: {
   idx: string;
   tab: DocTab;
+  find: FindState;
+  setFind: (f: (s: FindState) => FindState) => void;
+  onSide: (side: "editor" | "preview") => void;
   editor: React.RefObject<EditorHandle | null>;
   onChange: (content: string) => void;
   onOpenLink: Props["onOpenLink"];
@@ -298,7 +312,6 @@ function SplitEditor({
     const l = lock.current;
     return !!l && l.by !== by && performance.now() < l.until;
   };
-  const [noFind, setNoFind] = useState<FindState>({ open: false, query: "", index: 0, focus: 0 });
 
   const fromEditor = () => {
     const v = editor.current?.view();
@@ -348,11 +361,12 @@ function SplitEditor({
 
   return (
     <div className="split-edit">
-      <div className="split-col editor-body">
+      <div className="split-col editor-body" onPointerDownCapture={() => onSide("editor")} onFocusCapture={() => onSide("editor")}>
         <Suspense fallback={null}>
           <Editor
             ref={editor}
             value={tab.content}
+            searchLocation={tab.line}
             onChange={onChange}
             initialScroll={initialScroll}
             onScroll={(top) => {
@@ -362,14 +376,15 @@ function SplitEditor({
           />
         </Suspense>
       </div>
-      <div className="split-col">
+      {/* クリックでフォーカスを移せるようにする（エディタからフォーカスを外し、⌘F をプレビュー側で受ける） */}
+      <div className="split-col split-preview" tabIndex={-1} onPointerDownCapture={() => onSide("preview")} onFocusCapture={() => onSide("preview")}>
         <PreviewPane
           id={`pane-${idx}-split`}
           tab={tab}
           initialScroll={0}
           onScroll={() => schedule("preview")}
-          find={noFind}
-          setFind={setNoFind}
+          find={find}
+          setFind={setFind}
           onOutline={onOutline}
           onOpenLink={onOpenLink}
           scrollerRef={preview}

@@ -1,4 +1,5 @@
 mod git;
+mod search;
 mod text_file;
 mod watch;
 
@@ -8,8 +9,8 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
@@ -390,6 +391,62 @@ async fn write_text(
 #[derive(Default)]
 struct Roots(Mutex<HashMap<String, PathBuf>>);
 
+#[derive(Default)]
+struct FolderSearches(Mutex<HashMap<String, Arc<AtomicU64>>>);
+
+#[tauri::command]
+async fn search_folder(
+    window: WebviewWindow,
+    roots: State<'_, Roots>,
+    root: String,
+    query: String,
+    case_sensitive: bool,
+    regex: bool,
+    max_results: Option<usize>,
+) -> Result<search::SearchResults, String> {
+    let (registered, generation, current) = {
+        let folders = roots.0.lock().unwrap();
+        let registered = folders
+            .get(window.label())
+            .cloned()
+            .ok_or("フォルダが開かれていません")?;
+        let searches = window.state::<FolderSearches>();
+        let mut windows = searches.0.lock().unwrap();
+        let generation = windows
+            .entry(window.label().to_owned())
+            .or_default()
+            .clone();
+        let current = generation.fetch_add(1, Ordering::Relaxed) + 1;
+        (registered, generation, current)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let actual = fs::canonicalize(&registered).map_err(|e| e.to_string())?;
+        if !actual.is_dir() || fs::canonicalize(root).ok().as_ref() != Some(&actual) {
+            return Err("開いているフォルダだけを検索できます".into());
+        }
+        let mut results = search::search(
+            &actual,
+            &query,
+            case_sensitive,
+            regex,
+            max_results.unwrap_or(search::DEFAULT_MAX_RESULTS),
+            &generation,
+            current,
+        )?;
+        results.rebase_paths(&registered);
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn search_cancel(window: WebviewWindow, searches: State<'_, FolderSearches>) {
+    if let Some(generation) = searches.0.lock().unwrap().get(window.label()) {
+        generation.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// `..` などを取り除いた絶対パスにする（まだ存在しないパスにも使える）
 fn clean(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -626,11 +683,16 @@ fn watch_folder(
     root: String,
 ) -> Result<(), String> {
     let label = window.label().to_string();
-    roots
-        .0
-        .lock()
-        .unwrap()
-        .insert(label.clone(), PathBuf::from(&root));
+    {
+        let mut folders = roots.0.lock().unwrap();
+        let folder = PathBuf::from(&root);
+        if folders.get(&label) != Some(&folder) {
+            folders.insert(label.clone(), folder);
+            if let Some(generation) = app.state::<FolderSearches>().0.lock().unwrap().get(&label) {
+                generation.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
     let mut map = state.0.lock().unwrap();
     let files = map.remove(&label).map(|w| w.files).unwrap_or_default();
     let w = start_watch(&app, &label, Some(Path::new(&root)), files.clone())?;
@@ -865,6 +927,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .copy_with_text("コピー")
         .paste_with_text("ペースト")
         .select_all_with_text("すべてを選択")
+        .separator()
+        .item(
+            &MenuItemBuilder::with_id("search-folder", "フォルダ内を検索")
+                .accelerator("CmdOrCtrl+Shift+F")
+                .build(app)?,
+        )
         .build()?;
     let view = SubmenuBuilder::new(app, "表示")
         .fullscreen_with_text("フルスクリーン")
@@ -901,6 +969,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(WatchState::default())
         .manage(Roots::default())
+        .manage(FolderSearches::default())
         .manage(Quitting::default())
         .manage(PendingOpen::default())
         .menu(build_menu)
@@ -918,6 +987,15 @@ pub fn run() {
                 let label = window.label().to_string();
                 app.state::<WatchState>().0.lock().unwrap().remove(&label);
                 app.state::<Roots>().0.lock().unwrap().remove(&label);
+                if let Some(generation) = app
+                    .state::<FolderSearches>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .remove(&label)
+                {
+                    generation.fetch_add(1, Ordering::Relaxed);
+                }
                 // 終了ではなくウィンドウを閉じただけなら、そのウィンドウは次回開き直さない（最後の1枚は残す）
                 if !app.state::<Quitting>().0.load(Ordering::SeqCst) {
                     let mut rest: Vec<String> = app
@@ -947,6 +1025,8 @@ pub fn run() {
             watch_files,
             write_text,
             watch_folder,
+            search_folder,
+            search_cancel,
             load_session,
             save_session,
             load_settings,

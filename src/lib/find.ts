@@ -4,15 +4,17 @@
  * （::highlight(mdock-find) / ::highlight(mdock-find-current)）。
  */
 
-/** 検索対象にしない部分（ボタンの文字や、KaTeX の読み上げ用の重複テキストなど） */
-const SKIP = "button, script, style, svg, .katex-mathml, .find-skip";
-const BLOCK = "p, li, h1, h2, h3, h4, h5, h6, td, th, pre, blockquote, dt, dd, div, figcaption";
-const MAX = 5000;
+/** 検索対象にしない部分（ボタンの文字や、KaTeX の読み上げ用の重複テキストなど）。Mermaid 図の文字は対象にする */
+const SKIP = "button, script, style, svg title, svg desc, .katex-mathml, .find-skip";
+/** この単位ごとに区切る（段落や、図の中のラベルをまたいだ一致を防ぐ） */
+const BLOCK = "p, li, h1, h2, h3, h4, h5, h6, td, th, pre, blockquote, dt, dd, div, figcaption, text, foreignObject";
+/** 一致の数の上限（これを超えたら打ち切る） */
+export const FIND_LIMIT = 100_000;
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** root の中で query に一致する範囲をすべて返す（大文字小文字は区別しない。要素をまたいでも見つける） */
-export function findRanges(root: HTMLElement, query: string): Range[] {
+/** root の中で query に一致する範囲をすべて返す（要素をまたいでも見つける） */
+export function findRanges(root: HTMLElement, query: string, caseSensitive = false): Range[] {
   if (!query) return [];
   const nodes: Text[] = [];
   const starts: number[] = [];
@@ -32,7 +34,7 @@ export function findRanges(root: HTMLElement, query: string): Range[] {
     starts.push(text.length);
     text += n.data;
   }
-  const re = new RegExp(escapeRe(query), "giu");
+  const re = new RegExp(escapeRe(query), caseSensitive ? "gu" : "giu");
   const ranges: Range[] = [];
   const locate = (pos: number): [Text, number] => {
     // pos を含むテキストノードを二分探索で探す
@@ -45,7 +47,7 @@ export function findRanges(root: HTMLElement, query: string): Range[] {
     }
     return [nodes[lo], Math.min(pos - starts[lo], nodes[lo].length)];
   };
-  for (let m = re.exec(text); m && ranges.length < MAX; m = re.exec(text)) {
+  for (let m = re.exec(text); m && ranges.length < FIND_LIMIT; m = re.exec(text)) {
     if (!m[0]) {
       re.lastIndex++;
       continue;
@@ -65,23 +67,34 @@ export const highlightSupported = () => typeof CSS !== "undefined" && "highlight
 /** ペインごとの一致箇所。CSS.highlights は全体で1つなので、全ペインの分をまとめて登録する。 */
 const registry = new Map<string, { ranges: Range[]; current: number }>();
 
-function apply() {
+/**
+ * 一致箇所すべて（mdock-find）と、今の一致（mdock-find-current、上に重ねて描く）。
+ * 件数が多くても「次へ」が重くならないよう、一致の一覧が変わったときだけ全体を作り直す。
+ */
+function apply(rebuildAll: boolean) {
   if (!highlightSupported()) return;
-  const all = new Highlight();
-  const cur = new Highlight();
-  for (const { ranges, current } of registry.values()) {
-    ranges.forEach((r, i) => (i === current ? cur : all).add(r));
+  if (rebuildAll) {
+    const all = new Highlight();
+    for (const { ranges } of registry.values()) for (const r of ranges) all.add(r);
+    CSS.highlights.set("mdock-find", all);
   }
-  CSS.highlights.set("mdock-find", all);
+  const cur = new Highlight();
+  cur.priority = 1;
+  for (const { ranges, current } of registry.values()) {
+    const r = ranges[current];
+    if (r) cur.add(r);
+  }
   CSS.highlights.set("mdock-find-current", cur);
 }
 
 export function setFindHighlights(id: string, ranges: Range[], current: number) {
+  const prev = registry.get(id);
+  const changed = prev?.ranges !== ranges;
   if (ranges.length) registry.set(id, { ranges, current });
   else registry.delete(id);
-  apply();
+  apply(changed || !ranges.length);
 }
 
 export function clearFindHighlights(id: string) {
-  if (registry.delete(id)) apply();
+  if (registry.delete(id)) apply(true);
 }

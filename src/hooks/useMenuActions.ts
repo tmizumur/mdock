@@ -11,12 +11,14 @@ export function useMenuActions(
   pickFolder: ReturnType<typeof useFolder>["pickFolder"],
   printPane: ReturnType<typeof usePaneActions>["printPane"],
   setSettingsOpen: (open: boolean) => void,
+  toggleSearch: () => void,
 ) {
   // メニュー（⌘W・⌘O・⌘S など）から呼ばれる操作。最新の状態を使うため ref 経由で呼ぶ
   const actions = useRef<Record<string, () => void>>({});
   actions.current = {
     "open-file": pickFiles,
     "open-folder": pickFolder,
+    "search-folder": toggleSearch,
     save: () => {
       const p = wsRef.current.panes[activeRef.current];
       const t = p && activeTab(p);

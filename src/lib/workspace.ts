@@ -32,7 +32,7 @@ export const mapTabs = (w: Workspace, fn: (t: Tab) => Tab): Workspace => {
 /** タブを取り除いた後の、前面のタブの位置 */
 export const activeAfterRemove = (active: number, removedAt: number, len: number) =>
   Math.max(0, removedAt < active ? active - 1 : Math.min(active, len - 1));
-export const cloneTab = (t: Tab): Tab => ({ ...t, id: newId(), ...(t.kind === "doc" ? { anchor: undefined } : {}) });
+export const cloneTab = (t: Tab): Tab => ({ ...t, id: newId(), ...(t.kind === "doc" ? { anchor: undefined, line: undefined } : {}) });
 
 /**
  * タブがなくなったペインを消す（隣が広がる）。最後の 1 ペインは残す。

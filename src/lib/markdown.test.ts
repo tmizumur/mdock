@@ -2,6 +2,7 @@
 
 import { clearMocks, mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it } from "vitest";
+import { previewSearchBlock } from "./folderSearch";
 import { isRelative, loadMath, localSrc, markdownHeadings, renderMarkdown } from "./markdown";
 
 const base = "/workspace/docs/guide.md";
@@ -16,6 +17,23 @@ function render(src: string, basePath?: string) {
 afterEach(clearMocks);
 
 describe("Markdown の描画", () => {
+  it("全文検索でインデント形式のコードブロック内の行に移動できる", () => {
+    const preview = document.createElement("div");
+    preview.append(render("本文\n\n    最初の行\n    一致する行\n\n続き"));
+    const block = preview.querySelector("pre[data-line='2']");
+
+    expect(block?.textContent).toContain("一致する行");
+    expect(previewSearchBlock(preview, 3)).toEqual({ block, blockLine: 2 });
+  });
+
+  it("最上位の数式ブロックと math フェンスに行番号を付ける", async () => {
+    await loadMath();
+    const html = render("本文\n\n$$\nx^2\n$$\n\n```math\ny^2\n```");
+
+    expect(html.querySelector("p.katex-block[data-line='2']")).not.toBeNull();
+    expect(html.querySelector("p.katex-block[data-line='6']")).not.toBeNull();
+  });
+
   it("見出しにアンカーを付け、アウトラインに見出しの行番号を返す", () => {
     const src = "# Hello World\n\n本文\n\n## Use `code`";
     const html = render(src);

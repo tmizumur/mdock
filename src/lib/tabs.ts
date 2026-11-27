@@ -3,6 +3,8 @@
 import { type LayoutNode, type PresetLayout, PRESET_COUNT, leaves as leavesOf, presetLayout, validLayout } from "./layout";
 import type { DiskStamp, FileError, TextFormat, TextInfo, TextReadResult } from "./api";
 
+import type { SearchLocation } from "./folderSearch";
+
 export type ViewMode = "view" | "edit" | "split";
 
 export const textFormat = (info: TextInfo): TextFormat & { lossy?: boolean; diskStamp: DiskStamp } => ({
@@ -32,6 +34,7 @@ export type DocTab = {
   readError?: FileError;
   /** 開いたら移動したい見出し（別ファイルの #見出し へのリンクから開いたとき） */
   anchor?: { id: string; nonce: number };
+  line?: SearchLocation;
   /** ファイルが外部で削除された（同名で作り直されたら戻る） */
   deleted?: boolean;
   /** 未保存の変更があるときに、外部で書き換わった内容（再読み込みするか確認する） */

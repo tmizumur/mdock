@@ -136,7 +136,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .sep.sep-h::after { inset: -3px 0; }
 
 /* サイドバー */
-.sidebar { height: 100%; display: flex; flex-direction: column; background: var(--bg-side); user-select: none; }
+.sidebar { position: relative; height: 100%; display: flex; flex-direction: column; background: var(--bg-side); user-select: none; }
 .sidebar-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 6px 8px 6px 12px; flex-shrink: 0;
@@ -146,6 +146,41 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 }
 .explorer-actions { display: flex; gap: 2px; }
 .explorer-actions .icon-btn { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; }
+.sidebar-explorer { display: contents; }
+.sidebar-explorer[inert] { visibility: hidden; }
+.folder-search {
+  position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg-side);
+}
+.folder-search-controls { display: flex; align-items: center; gap: 3px; margin: 0 8px; }
+.folder-search-controls input {
+  min-width: 0; flex: 1; padding: 5px 6px; border: 1px solid var(--border);
+  border-radius: var(--radius-small); background: var(--bg-elev); color: var(--fg);
+}
+.folder-search-controls .icon-btn { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; }
+.folder-search-controls .icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.folder-search-status { margin: 8px 10px 4px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.folder-search-status[role="alert"] { color: var(--danger); white-space: pre-wrap; overflow: auto; }
+.folder-search-results { overflow: auto; flex: 1; min-height: 0; padding: 0 6px 12px; }
+.folder-search-file, .folder-search-match {
+  display: flex; align-items: center; width: 100%; padding: 4px 6px; text-align: left; border: 0;
+  border-radius: var(--radius-row); background: transparent; color: var(--fg); cursor: pointer;
+}
+.folder-search-file:hover, .folder-search-match:hover { background: var(--bg-hover); }
+.folder-search-results button:focus-visible { outline-offset: -2px; }
+.folder-search-file { gap: 5px; font-size: 13px; }
+.folder-search-file svg, .folder-search-count { flex-shrink: 0; color: var(--fg-muted); }
+.folder-search-filename, .folder-search-path, .folder-search-match > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-search-filename { min-width: 50px; }
+.folder-search-path, .folder-search-count { color: var(--fg-muted); font-size: 11px; }
+.folder-search-count { margin-left: auto; }
+.folder-search-match { padding-left: 25px; font-size: 12px; }
+.folder-search-match > * { white-space: pre; }
+/* 一致の前は左側を省略して一致の近くを見せる（「…前の文 一致」） */
+.folder-search-before { flex: 0 1 auto; min-width: 0; max-width: 60%; direction: rtl; }
+.folder-search-after { min-width: 0; flex: 1 1 0; }
+.folder-search-match mark { min-width: 0; flex: 0 0 auto; max-width: 70%; background: var(--find); color: var(--fg); }
+.folder-search-match mark:empty { width: 2px; height: 1em; }
+.markdown-body .folder-search-jump { outline: 1px solid var(--accent); background-color: var(--accent-soft); }
 .tree { overflow: auto; flex: 1; min-height: 0; padding-bottom: 16px; outline: none; }
 .tree-item { position: absolute; top: 0; left: 0; right: 0; transition: transform var(--motion-layout) var(--ease-out); }
 .tree-row {
@@ -188,16 +223,30 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
   display: flex; flex-direction: column; flex: 0 1 32%; min-height: 0; max-height: 32%;
   border-top: 1px solid var(--border); padding: 0 6px;
 }
-.outline .sidebar-label { flex-shrink: 0; padding: 9px 6px; }
+.outline-head { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.outline-head .sidebar-label { flex-shrink: 0; padding: 9px 6px; }
+.outline-head .icon-btn { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; margin-left: auto; }
+.outline-filter {
+  flex: 1; min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-small);
+  background: var(--bg-elev); color: var(--fg); font: inherit; font-size: 12px; outline: none;
+}
+.outline-filter:focus { border-color: var(--accent); }
 .outline-list { list-style: none; margin: 0; padding: 0 0 6px; overflow: auto; }
-.outline-list button {
-  display: block; width: 100%; height: 26px; padding: 0 8px; text-align: left;
+.outline-list li { display: flex; align-items: center; min-width: 0; }
+.outline-list li.dim .outline-item { color: var(--fg-faint); }
+.outline-toggle {
+  flex: 0 0 16px; display: grid; place-items: center; width: 16px; height: 26px; padding: 0;
+  border: 0; background: none; color: var(--fg-faint);
+}
+button.outline-toggle:hover { color: var(--fg); }
+.outline-item {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px 0 2px; text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   border: 0; border-radius: var(--radius-row); background: none; color: var(--fg-muted);
   font-size: 12.5px; transition: var(--color-transition);
 }
-.outline-list button:hover { background: var(--bg-hover); }
-.outline-list button[aria-current] { color: var(--accent); font-weight: 600; }
+.outline-item:hover { background: var(--bg-hover); }
+.outline-item[aria-current] { color: var(--accent); font-weight: 600; }
 .outline-empty { margin: 0; padding: 3px 8px; color: var(--fg-faint); font-size: 12px; }
 
 /* ペイン */
@@ -437,6 +486,7 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .split-col { flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; }
 .split-col + .split-col { border-left: 1px solid var(--border); }
 .split-col.editor-body { height: 100%; }
+.split-preview:focus, .split-preview:focus-visible { outline: none; }
 
 /* 差分 */
 .diff { font-size: 12.5px; }
