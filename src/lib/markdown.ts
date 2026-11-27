@@ -125,6 +125,16 @@ export function loadMath(): Promise<void> {
         enableMathInlineInHtml: true,
         enableFencedBlocks: true,
       });
+      for (const name of ["math_block", "fence"]) {
+        const render = md.renderer.rules[name]!;
+        md.renderer.rules[name] = (tokens, idx, options, env, self) => {
+          const html = render(tokens, idx, options, env, self);
+          const token = tokens[idx];
+          return token.map && token.level === 0
+            ? html.replace(/^<p(?= class="katex-block\b)/, `<p data-line="${token.map[0]}"`)
+            : html;
+        };
+      }
       mathPlugin = true;
     });
   }
@@ -276,7 +286,7 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 };
 
 // ブロック要素に元の Markdown の行番号を付ける（スクロール同期用）
-for (const name of ["paragraph_open", "heading_open", "bullet_list_open", "ordered_list_open", "table_open", "blockquote_open", "alert_open", "hr", "html_block"]) {
+for (const name of ["paragraph_open", "heading_open", "bullet_list_open", "ordered_list_open", "table_open", "blockquote_open", "alert_open", "hr", "html_block", "code_block"]) {
   const orig = md.renderer.rules[name];
   md.renderer.rules[name] = (tokens, idx, options, env, self) => {
     const t = tokens[idx];

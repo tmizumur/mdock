@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, X } from "lucide-react";
-import { MAX_SEARCH_RESULTS, searchFolder, splitMatch, type FolderSearchResults, type SearchLocation } from "../lib/folderSearch";
+import { cancelFolderSearch, MAX_SEARCH_RESULTS, searchFolder, splitMatch, type FolderSearchResults, type SearchLocation } from "../lib/folderSearch";
 
 type Props = {
   root: string | null;
@@ -32,16 +32,18 @@ export default function FolderSearch({ root, onClose, onOpen }: Props) {
   }, [root, query, caseSensitive, regex, key]);
 
   useEffect(() => {
+    if (!query) return;
     const pending = requests.current;
     pending.timer = window.setTimeout(run, 250);
     return () => {
       window.clearTimeout(pending.timer);
       pending.id++;
     };
-  }, [run]);
+  }, [query, run]);
 
   useEffect(() => {
     input.current?.focus();
+    return () => { void cancelFolderSearch().catch(() => {}); };
   }, []);
 
   const current = query && response?.key === key ? response : undefined;
@@ -61,7 +63,11 @@ export default function FolderSearch({ root, onClose, onOpen }: Props) {
       <div className="folder-search-controls">
         <input ref={input} type="text" aria-label="フォルダ内を検索" placeholder="フォルダ内を検索"
           value={query} spellCheck={false} autoComplete="off" aria-invalid={error ? true : undefined}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (!value) void cancelFolderSearch().catch(() => {});
+            setQuery(value);
+          }}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter") {

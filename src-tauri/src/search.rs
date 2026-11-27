@@ -1,4 +1,5 @@
 use crate::{SKIP_DIRS, text_file};
+use encoding_rs::Encoding;
 use ignore::{WalkBuilder, WalkState};
 use regex::RegexBuilder;
 use serde::Serialize;
@@ -7,7 +8,7 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
 const SNIFF_BYTES: u64 = 8 * 1024;
@@ -19,6 +20,17 @@ pub(crate) struct SearchResults {
     files: Vec<FileMatches>,
     count: usize,
     truncated: bool,
+}
+
+impl SearchResults {
+    pub(crate) fn rebase_paths(&mut self, root: &Path) {
+        for file in &mut self.files {
+            file.path = root
+                .join(&file.relative_path)
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -56,7 +68,7 @@ fn read_text(path: &Path) -> Option<String> {
 
     let mut bytes = Vec::new();
     (&mut file).take(SNIFF_BYTES).read_to_end(&mut bytes).ok()?;
-    if bytes.contains(&0) {
+    if Encoding::for_bom(&bytes).is_none() && bytes.contains(&0) {
         return None;
     }
     let remaining = MAX_BYTES + 1 - bytes.len() as u64;
@@ -124,8 +136,11 @@ pub(crate) fn search(
         .build()
         .map_err(|error| format!("正規表現が正しくありません。\n{error}"))?;
 
+    let limit = limit.min(DEFAULT_MAX_RESULTS);
     let files = Mutex::new(Vec::new());
     let count = AtomicUsize::new(0);
+    let truncated = AtomicBool::new(limit == 0);
+    let stopped = || cancelled() || truncated.load(Ordering::Relaxed);
     WalkBuilder::new(root)
         .hidden(false)
         .require_git(false)
@@ -146,8 +161,9 @@ pub(crate) fn search(
             let matcher = matcher.clone();
             let count = &count;
             let files = &files;
+            let truncated = &truncated;
             Box::new(move |entry| {
-                if cancelled() || count.load(Ordering::Relaxed) > limit {
+                if stopped() {
                     return WalkState::Quit;
                 }
                 let Ok(entry) = entry else {
@@ -167,23 +183,36 @@ pub(crate) fn search(
                 };
                 let mut state = WalkState::Continue;
                 'lines: for (line, text) in text.split('\n').enumerate() {
-                    if cancelled() || count.load(Ordering::Relaxed) > limit {
+                    if stopped() {
                         state = WalkState::Quit;
                         break;
                     }
                     let mut offset = 0;
                     let mut column = 0;
                     for hit in matcher.find_iter(text) {
-                        if cancelled()
-                            || count.load(Ordering::Relaxed) > limit
-                            || count.fetch_add(1, Ordering::Relaxed) >= limit
-                        {
+                        if stopped() {
                             state = WalkState::Quit;
                             break 'lines;
+                        }
+                        let Ok(previous) =
+                            count.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                                (count < limit).then_some(count + 1)
+                            })
+                        else {
+                            state = WalkState::Quit;
+                            break 'lines;
+                        };
+                        let reached_limit = previous + 1 == limit;
+                        if reached_limit {
+                            truncated.store(true, Ordering::Relaxed);
                         }
                         column += text[offset..hit.start()].encode_utf16().count();
                         let length = hit.as_str().encode_utf16().count();
                         matches.push(snippet(line, text, hit.start(), hit.end(), column, length));
+                        if reached_limit {
+                            state = WalkState::Quit;
+                            break 'lines;
+                        }
                         column += length;
                         offset = hit.end();
                     }
@@ -208,11 +237,10 @@ pub(crate) fn search(
     }
     let mut files = files.into_inner().unwrap();
     files.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
-    let count = count.into_inner();
     Ok(SearchResults {
         files,
-        count: count.min(limit),
-        truncated: count > limit,
+        count: count.into_inner(),
+        truncated: truncated.into_inner(),
     })
 }
 
@@ -282,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn truncates_only_when_another_match_exists() {
+    fn truncates_as_soon_as_the_limit_is_reached() {
         let dir = TempDir::new();
         for n in 0..10 {
             fs::write(dir.0.join(format!("{n}.md")), "hit hit").unwrap();
@@ -298,13 +326,43 @@ mod tests {
                 .sum::<usize>(),
             3
         );
-        assert!(!run(&dir.0, "hit", true, false, 20).unwrap().truncated);
+        let exact = run(&dir.0, "hit", true, false, 20).unwrap();
+        assert_eq!(exact.count, 20);
+        assert!(exact.truncated);
+        assert!(!run(&dir.0, "hit", true, false, 21).unwrap().truncated);
         assert!(
             search(&dir.0, "hit", true, false, 20, &AtomicU64::new(2), 1)
                 .unwrap()
                 .files
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn caps_requested_limit_at_5000() {
+        let dir = TempDir::new();
+        fs::write(dir.0.join("note.md"), "hit\n".repeat(6000)).unwrap();
+        let result = run(&dir.0, "hit", true, false, 6000).unwrap();
+        assert_eq!(result.count, 5000);
+        assert!(result.truncated);
+        assert_eq!(result.files[0].matches.len(), 5000);
+        assert_eq!(result.files[0].matches[4999].line, 4999);
+    }
+
+    #[test]
+    fn searches_utf8_and_utf16_files_with_bom() {
+        let dir = TempDir::new();
+        for encoding in ["UTF-8", "UTF-16LE", "UTF-16BE"] {
+            let path = dir.0.join(format!("{encoding}.md"));
+            text_file::write(&path, "hit😀\n本文", Some(encoding), true, None).unwrap();
+        }
+        let result = run(&dir.0, "^hit😀$", true, true, 5000).unwrap();
+        assert_eq!(result.count, 3);
+        assert_eq!(result.files.len(), 3);
+        for file in result.files {
+            assert_eq!(file.matches[0].text, "hit😀");
+            assert_eq!(file.matches[0].line, 0);
+        }
     }
 
     #[test]

@@ -108,7 +108,7 @@ export default function Pane(props: Props) {
   }
 
   return (
-    <section className={`pane ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} data-pane={idx}>
+    <section className={`pane ${props.printTarget ? "print-target" : ""}`} onMouseDown={onFocus} onFocusCapture={onFocus} data-pane={idx}>
       <TabBar
         paneId={idx}
         pane={pane}

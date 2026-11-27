@@ -36,6 +36,10 @@ export function searchFolder(root: string, query: string, caseSensitive: boolean
   return invoke<FolderSearchResults>("search_folder", { root, query, caseSensitive, regex, maxResults: MAX_SEARCH_RESULTS });
 }
 
+export function cancelFolderSearch() {
+  return invoke<void>("search_cancel");
+}
+
 export function splitMatch({ text, start, end }: Pick<FolderMatch, "text" | "start" | "end">) {
   return { before: text.slice(0, start), match: text.slice(start, end), after: text.slice(end) };
 }

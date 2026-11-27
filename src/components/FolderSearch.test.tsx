@@ -3,11 +3,12 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { searchFolder } from "../lib/folderSearch";
+import { cancelFolderSearch, searchFolder } from "../lib/folderSearch";
 import FolderSearch from "./FolderSearch";
 
 vi.mock("../lib/folderSearch", async (importOriginal) => ({
   ...await importOriginal<typeof import("../lib/folderSearch")>(),
+  cancelFolderSearch: vi.fn(),
   searchFolder: vi.fn(),
 }));
 
@@ -43,6 +44,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   lookup.mockReset().mockResolvedValue(results);
+  vi.mocked(cancelFolderSearch).mockReset().mockResolvedValue(undefined);
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   act(() => root.render(<FolderSearch root="/work" onClose={onClose} onOpen={onOpen} />));
@@ -97,4 +99,20 @@ it("Enter ですぐ検索し、以前の結果より最新のエラーを優先�
   await act(async () => { resolveOld(results); });
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("正規表現が正しくありません。");
   expect(rows()).toHaveLength(0);
+});
+
+it("入力を空にしたときとパネルを閉じたときに走査を取り消す", async () => {
+  lookup.mockReturnValue(new Promise(() => {}));
+  type("一致");
+  key("Enter");
+  type("");
+  expect(cancelFolderSearch).toHaveBeenCalledTimes(1);
+  await flush();
+  expect(lookup).toHaveBeenCalledTimes(1);
+
+  type("再検索");
+  key("Enter");
+  expect(lookup).toHaveBeenCalledTimes(2);
+  act(() => root.render(null));
+  expect(cancelFolderSearch).toHaveBeenCalledTimes(2);
 });

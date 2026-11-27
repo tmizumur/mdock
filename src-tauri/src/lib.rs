@@ -424,18 +424,27 @@ async fn search_folder(
         if !actual.is_dir() || fs::canonicalize(root).ok().as_ref() != Some(&actual) {
             return Err("開いているフォルダだけを検索できます".into());
         }
-        search::search(
-            &registered,
+        let mut results = search::search(
+            &actual,
             &query,
             case_sensitive,
             regex,
             max_results.unwrap_or(search::DEFAULT_MAX_RESULTS),
             &generation,
             current,
-        )
+        )?;
+        results.rebase_paths(&registered);
+        Ok(results)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn search_cancel(window: WebviewWindow, searches: State<'_, FolderSearches>) {
+    if let Some(generation) = searches.0.lock().unwrap().get(window.label()) {
+        generation.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// `..` などを取り除いた絶対パスにする（まだ存在しないパスにも使える）
@@ -1017,6 +1026,7 @@ pub fn run() {
             write_text,
             watch_folder,
             search_folder,
+            search_cancel,
             load_session,
             save_session,
             load_settings,
