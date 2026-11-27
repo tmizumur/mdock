@@ -17,8 +17,9 @@ export const watchFiles = (paths: string[]) => invoke<void>("watch_files", { pat
 /** 変更のあったフォルダだけ読み直す（フォルダごとの中身。消えていれば null） */
 export const readDirs = (dirs: string[]) => invoke<(Entry[] | null)[]>("read_dirs", { dirs });
 
-export type Stat = { exists: boolean; is_dir: boolean; mtime: number; size: number };
+export type Stat = { exists: boolean; is_dir: boolean; is_executable?: boolean; mtime: number; size: number };
 export const statPaths = (paths: string[]) => invoke<Stat[]>("stat_paths", { paths });
+export const confirmOpenUrl = (url: string) => invoke<void>("confirm_open_url", { url });
 
 export const isMarkdown = (name: string) => /\.(md|markdown|mdx)$/i.test(name);
 

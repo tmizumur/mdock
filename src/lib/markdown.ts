@@ -3,6 +3,8 @@ import anchor from "markdown-it-anchor";
 import type { HighlighterGeneric } from "shiki";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { resolvePath, safeDecode } from "./api";
+import { isBlockedLink } from "./links";
+import { sanitizeHtmlBlock, sanitizeMarkdown } from "./markdownSanitizer";
 
 /** よく使う言語だけ先に読み込む。それ以外はプレーン表示。 */
 const LANGS = [
@@ -87,9 +89,15 @@ const escapeHtml = (s: string) =>
 
 const COPY_BTN = `<button class="copy-btn" type="button" title="コードをコピー">コピー</button>`;
 
-type Env = { base?: string };
+type Env = { base?: string; sanitizeDocument?: boolean };
 
 const md = new MarkdownIt({ html: true, linkify: true, typographer: false });
+
+md.renderer.rules.link_open = (tokens, idx, options, _env, self) => {
+  const token = tokens[idx];
+  if (isBlockedLink(String(token.attrGet("href") ?? ""))) token.attrs?.splice(token.attrIndex("href"), 1);
+  return self.renderToken(tokens, idx, options);
+};
 
 // ---- 数式（KaTeX）: 数式を含むファイルを開いたときだけ読み込む ----
 
@@ -109,6 +117,7 @@ export function loadMath(): Promise<void> {
       const styles = getComputedStyle(document.documentElement);
       md.use(plugin, {
         throwOnError: false,
+        trust: false,
         errorColor: styles.getPropertyValue("--danger").trim(),
         enableMathBlockInHtml: true,
         enableMathInlineInHtml: true,
@@ -121,13 +130,13 @@ export function loadMath(): Promise<void> {
 }
 
 // コードブロック: 色付けは見えたときに行う（大きなファイルでも固まらないように）
-md.renderer.rules.fence = (tokens, idx) => {
+md.renderer.rules.fence = (tokens, idx, _options, env) => {
   const token = tokens[idx];
   const lang = token.info.trim().split(/\s+/)[0] ?? "";
   const code = token.content;
   const line = token.map ? ` data-line="${token.map[0]}"` : "";
   if (lang === "mermaid") {
-    const svg = mermaidCache.get(code);
+    const svg = !(env as Env | undefined)?.sanitizeDocument && mermaidCache.get(code);
     if (svg) return `<div class="mermaid-block" data-processed="1"${line}>${svg}</div>`;
     return `<div class="mermaid-block"${line}><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
   }
@@ -178,6 +187,9 @@ for (const name of ["paragraph_open", "heading_open", "bullet_list_open", "order
 }
 
 // GFM のチェックボックス（- [ ] / - [x]）を表示用に変換
+md.renderer.rules.task_checkbox = (tokens, idx) =>
+  `<input type="checkbox" disabled ${tokens[idx].content ? "checked" : ""}> `;
+
 md.core.ruler.after("inline", "task-list", (state: any) => {
   for (const token of state.tokens) {
     if (token.type !== "inline" || !token.children?.length) continue;
@@ -185,14 +197,39 @@ md.core.ruler.after("inline", "task-list", (state: any) => {
     const m = first.type === "text" ? /^\[([ xX])\]\s/.exec(first.content) : null;
     if (!m) continue;
     first.content = first.content.slice(m[0].length);
-    const box = new state.Token("html_inline", "", 0);
-    box.content = `<input type="checkbox" disabled ${m[1] !== " " ? "checked" : ""}> `;
+    const box = new state.Token("task_checkbox", "", 0);
+    box.content = m[1].trim();
     token.children.unshift(box);
   }
   return true;
 });
 
-export const renderMarkdown = (src: string, base?: string) => md.render(src, { base } satisfies Env);
+export function renderMarkdown(src: string, base?: string) {
+  const tokens = md.parse(src, { base });
+  const render = (from: number, to?: number, sanitizeDocument = false) =>
+    md.renderer.render(tokens.slice(from, to), md.options, { base, sanitizeDocument } satisfies Env);
+  let html = "";
+  let start = 0;
+  let blockStart = 0;
+  let hasRawHtml = false;
+  // 生 HTML を含む最上位のブロックだけを無害化する。
+  for (const [i, token] of tokens.entries()) {
+    hasRawHtml ||= token.type === "html_block" ||
+      (token.children?.some((child) => child.type === "html_inline") ?? false);
+    if (token.level !== 0 || token.nesting === 1) continue;
+    const end = i + 1;
+    if (hasRawHtml) {
+      html += render(start, blockStart);
+      const clean = sanitizeHtmlBlock(render(blockStart, end, true));
+      if (clean === null) return html + sanitizeMarkdown(render(blockStart, undefined, true));
+      html += clean;
+      start = end;
+      hasRawHtml = false;
+    }
+    blockStart = end;
+  }
+  return html + render(start);
+}
 
 /** Markdown の見出しと元の行番号（編集モードのアウトライン用）。 */
 export function markdownHeadings(src: string) {
@@ -248,6 +285,7 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
       const danger = cssValue("--danger");
       mermaid.initialize({
         startOnLoad: false,
+        securityLevel: "strict",
         theme: "base",
         themeVariables: {
           darkMode: true,
@@ -294,7 +332,7 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
             plotColorPalette: [accent, cssValue("--git-added"), cssValue("--git-modified"), danger, fgFaint].join(","),
           },
         },
-        secure: [...(mermaid.mermaidAPI.defaultConfig.secure ?? []), "theme", "themeVariables", "themeCSS"],
+        secure: [...(mermaid.mermaidAPI.defaultConfig.secure ?? []), "theme", "themeVariables", "themeCSS", "dompurifyConfig"],
       });
       return mermaid;
     });
@@ -304,6 +342,7 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
   try {
     let svg = mermaidCache.get(code);
     if (!svg) {
+      // strict モードで無害化された SVG を保存する。
       svg = (await mermaid.render(id, code)).svg;
       mermaidCache.set(code, svg);
     }

@@ -4,10 +4,14 @@ mod watch;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_opener::OpenerExt;
 
 /// フォルダツリーの1要素
 #[derive(Serialize)]
@@ -164,6 +168,7 @@ async fn read_text(path: String) -> Result<String, String> {
 struct Stat {
     exists: bool,
     is_dir: bool,
+    is_executable: bool,
     /// 更新時刻（ミリ秒）
     mtime: f64,
     size: u64,
@@ -178,6 +183,10 @@ async fn stat_paths(paths: Vec<String>) -> Result<Vec<Stat>, String> {
                 Ok(m) => Stat {
                     exists: true,
                     is_dir: m.is_dir(),
+                    #[cfg(unix)]
+                    is_executable: m.is_file() && m.permissions().mode() & 0o111 != 0,
+                    #[cfg(not(unix))]
+                    is_executable: false,
                     mtime: m
                         .modified()
                         .ok()
@@ -189,6 +198,7 @@ async fn stat_paths(paths: Vec<String>) -> Result<Vec<Stat>, String> {
                 Err(_) => Stat {
                     exists: false,
                     is_dir: false,
+                    is_executable: false,
                     mtime: 0.0,
                     size: 0,
                 },
@@ -197,6 +207,37 @@ async fn stat_paths(paths: Vec<String>) -> Result<Vec<Stat>, String> {
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn confirm_open_url(window: WebviewWindow, url: String) -> Result<(), String> {
+    let url = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
+    if matches!(
+        url.scheme(),
+        "http" | "https" | "mailto" | "file" | "javascript" | "vbscript" | "data"
+    ) {
+        return Err("このコマンドで開けない URL です".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        // opener の許可範囲を広げず、承認された URL だけ開く。
+        let mut dialog = window
+            .dialog()
+            .message(format!("このリンクを開きますか？\n{url}"))
+            .buttons(MessageDialogButtons::OkCancel);
+        #[cfg(desktop)]
+        {
+            dialog = dialog.parent(&window);
+        }
+        if dialog.blocking_show() {
+            window
+                .opener()
+                .open_url(url.to_string(), None::<&str>)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -758,6 +799,7 @@ pub fn run() {
             read_dirs,
             read_text,
             stat_paths,
+            confirm_open_url,
             watch_files,
             write_text,
             watch_folder,

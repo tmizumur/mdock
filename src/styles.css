@@ -240,6 +240,9 @@ button { font: inherit; color: inherit; cursor: pointer; transition: var(--color
 .markdown-body { max-width: 860px; margin: 0 auto; padding: 24px 40px 80px; line-height: var(--doc-line-height); font-size: var(--doc-font-size); word-wrap: break-word; }
 .markdown-body.width-wide { max-width: 1200px; }
 .markdown-body.width-full { max-width: none; }
+@media screen {
+  .pane-body > .markdown-body { contain: paint; }
+}
 .markdown-body h1 { font-size: calc(var(--doc-font-size) + var(--heading-1-size) - 15px); font-weight: 700; margin: 0.6em 0 0.5em; }
 .markdown-body h2 {
   font-size: calc(var(--doc-font-size) + var(--heading-2-size) - 15px); font-weight: 600; margin: 1.4em 0 0.6em;
