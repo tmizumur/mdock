@@ -458,12 +458,14 @@ button.outline-toggle:hover { color: var(--fg); }
 /* 分割しているとき、操作中のペインのタブバーの下線を差し色に（控えめに） */
 .split-group .pane.is-active .tabbar { border-bottom-color: color-mix(in srgb, var(--accent) 65%, var(--border)); }
 .pane-modes { flex-shrink: 0; color: var(--fg-muted); }
-.pane-modes button { display: inline-flex; align-items: center; white-space: nowrap; }
-.pane-modes svg { display: none; }
+.pane-modes button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 24px; padding: 0;
+}
+.pane-modes button:hover:not(.on, :disabled) { background: transparent; color: var(--fg); }
+.pane-modes button.on { color: var(--accent); }
 @container (max-width: 250px) {
-  .pane-modes svg { display: block; }
-  .pane-modes button { padding-inline: 5px; }
-  .pane-modes button span { display: none; }
+  .pane-modes button { width: 24px; }
   .tab-strip .tab { max-width: 100%; gap: 4px; padding-inline: 6px 3px; }
 }
 .tab {

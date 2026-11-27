@@ -1,8 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Columns2, Eye, Pencil, Printer } from "lucide-react";
+import { ChevronRight, Printer } from "lucide-react";
 import PreviewPane, { type FindState } from "./PreviewPane";
 import TabBar from "./TabBar";
 import DiffView from "./DiffView";
+import { EditModeIcon, SplitModeIcon, ViewModeIcon } from "./ModeIcons";
 import type { EditorHandle } from "./Editor";
 import type { OutlineState } from "./Outline";
 import { type FileError, norm } from "../lib/api";
@@ -49,11 +50,11 @@ type Props = {
   printTarget: boolean;
 };
 
-const MODES: [ViewMode, string, string, typeof Eye][] = [
-  ["view", "表示", "表示 (⌘E で編集と切り替え)", Eye],
-  ["edit", "編集", "編集 (⌘E)", Pencil],
-  ["split", "並べて", "左にエディタ、右にプレビュー（スクロールが連動）", Columns2],
-];
+const MODES = [
+  ["view", "表示（⌘E で編集と切り替え）", ViewModeIcon],
+  ["edit", "編集（⌘E）", EditModeIcon],
+  ["split", "編集とプレビューを並べて", SplitModeIcon],
+] as const;
 
 export default function Pane(props: Props) {
   const { idx, pane, active, rootDir, command, scrollOf, onScroll, onFocus, onChange, onMode, onSave, onOpenLink } = props;
@@ -118,9 +119,9 @@ export default function Pane(props: Props) {
         onContextMenu={props.onTabMenu}
         actions={doc && !doc.readError && (
           <div className="segmented pane-modes" role="group" aria-label="表示モード">
-            {MODES.map(([m, label, title, Icon]) => (
-              <button key={m} className={doc.mode === m ? "on" : ""} aria-pressed={doc.mode === m} aria-label={label} title={title} onClick={() => doc.mode !== m && onMode(m)}>
-                <Icon size={13} aria-hidden="true" /><span>{label}</span>
+            {MODES.map(([m, label, Icon]) => (
+              <button key={m} className={doc.mode === m ? "on" : ""} aria-pressed={doc.mode === m} aria-label={label} title={label} onClick={() => doc.mode !== m && onMode(m)}>
+                <Icon />
               </button>
             ))}
           </div>
