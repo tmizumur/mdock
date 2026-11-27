@@ -402,6 +402,7 @@ function SplitEditor({
           onOutline={onOutline}
           onOpenLink={onOpenLink}
           scrollerRef={preview}
+          eager
         />
       </div>
     </div>

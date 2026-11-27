@@ -4,6 +4,7 @@ import FindBar from "./FindBar";
 import OverviewRuler, { type Heading, useOutline } from "./OverviewRuler";
 import type { OutlineState } from "./Outline";
 import type { DocTab } from "../lib/tabs";
+import { RENDER_ALL } from "../lib/markdown";
 
 export type FindState = { open: boolean; query: string; index: number; focus: number };
 
@@ -19,12 +20,13 @@ type Props = {
   onOpenLink: (path: string, anchor?: string, newTab?: boolean) => void;
   /** スクロールする要素（編集＋プレビューの同期で使う） */
   scrollerRef?: React.RefObject<HTMLDivElement | null>;
+  eager?: boolean;
 };
 
 const restoredScrolls = new WeakSet<NonNullable<DocTab["scrollTo"]>>();
 
 /** プレビューと、右端の帯・検索バーをまとめたもの */
-export default function PreviewPane({ id, tab, initialScroll, onScroll, onScrollRestored, find, setFind, onOutline, onOpenLink, scrollerRef }: Props) {
+export default function PreviewPane({ id, tab, initialScroll, onScroll, onScrollRestored, find, setFind, onOutline, onOpenLink, scrollerRef, eager }: Props) {
   const own = useRef<HTMLDivElement>(null);
   const body = scrollerRef ?? own;
   const [version, setVersion] = useState(0);
@@ -60,6 +62,8 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, onScroll
     if (!el || !request || restoredScrolls.has(request)) return;
     restoredScrolls.add(request);
     cancelRestore();
+    // 長い文書を少しずつ描いている途中なら、戻り先まで届くよう残りを先に描く
+    window.dispatchEvent(new CustomEvent(RENDER_ALL, { detail: el.closest(".pane")?.getAttribute("data-pane") ?? null }));
     el.scrollTop = request.top;
     const restored = el.scrollTop;
     stick.current = restored > 0 && restored + el.clientHeight >= el.scrollHeight - 8;
@@ -115,7 +119,8 @@ export default function PreviewPane({ id, tab, initialScroll, onScroll, onScroll
           anchor={tab.anchor}
           line={tab.mode === "view" ? tab.line : undefined}
           onAnchorScrolled={cancelRestore}
-          eager={initialScroll > 0}
+          eager={eager}
+          eagerOnMount={initialScroll > 0}
           find={find.open ? { query: find.query, index: find.index } : undefined}
           onFindResult={setResult}
           onRendered={() => setVersion((v) => v + 1)}

@@ -373,11 +373,12 @@ export function renderMarkdown(src: string, base?: string) {
 export function markdownChunks(src: string, base?: string, chunkTokens = 1500): MarkdownChunk[] {
   const env: Record<string, unknown> = { base };
   const tokens = md.parse(src, env);
+  const normalized = src.replace(/\r\n?/g, "\n");
   const lineStarts = [0];
-  for (let i = src.indexOf("\n"); i >= 0; i = src.indexOf("\n", i + 1)) lineStarts.push(i + 1);
-  const offset = (line: number) => (line < lineStarts.length ? lineStarts[line] : src.length);
+  for (let i = normalized.indexOf("\n"); i >= 0; i = normalized.indexOf("\n", i + 1)) lineStarts.push(i + 1);
+  const offset = (line: number) => lineStarts[line] ?? normalized.length;
   // 参照リンクの定義や脚注は文書のどこにあっても前の部分の表示に効くので、その一覧も目印に含める
-  const refs = Object.keys((env.references as object | undefined) ?? {}).join("\u0000");
+  const refs = JSON.stringify(env.references ?? {});
   const notes = JSON.stringify((env.footnotes as { refs?: object } | undefined)?.refs ?? {});
   const prefix = `${mathPlugin ? 1 : 0}|${base ?? ""}|${refs}|${notes}|`;
   const ranges: [number, number][] = [];
@@ -402,7 +403,7 @@ export function markdownChunks(src: string, base?: string, chunkTokens = 1500): 
     const to = last ? undefined : firstLine(ranges[k + 1][0], ranges[k + 1][1]);
     const key = last || from === undefined || to === undefined
       ? `${prefix}last:${Math.random()}`
-      : `${prefix}${from}:${src.slice(offset(from), offset(to))}`;
+      : `${prefix}${from}:${normalized.slice(offset(from), offset(to))}`;
     return { key, html: () => (cache ??= renderRange(tokens, a, b, base)) };
   });
 }
@@ -531,6 +532,8 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
     leftover?.parentNode?.removeChild(leftover);
   }
 }
+
+export const RENDER_ALL = "mdock:render-all";
 
 /** 印刷の前に、まだ描いていないコードの色付け・図・画像をすべて描いておく */
 export async function renderAllPending(root: HTMLElement): Promise<void> {

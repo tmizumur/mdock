@@ -3,7 +3,7 @@ import { type MenuItem } from "../components/Dialogs";
 import { type PaneCommand } from "../components/Pane";
 import { printWindow } from "../lib/api";
 import { type Side } from "../lib/layout";
-import { renderAllPending } from "../lib/markdown";
+import { RENDER_ALL, renderAllPending } from "../lib/markdown";
 import { activeTab, tabTitle } from "../lib/tabs";
 import { type useWorkspace } from "./useWorkspace";
 
@@ -58,6 +58,7 @@ export function usePaneActions(
     focusPane(i);
     if (t.mode === "edit") updateActiveTab(i, (x) => (x.kind === "doc" ? { ...x, mode: "view" } : x));
     await new Promise((r) => setTimeout(r, 150));
+    window.dispatchEvent(new CustomEvent(RENDER_ALL, { detail: i }));
     const body = document.querySelector<HTMLElement>(`.pane[data-pane="${i}"] .markdown-body`);
     if (body) await renderAllPending(body);
     try {

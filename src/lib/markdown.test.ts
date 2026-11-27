@@ -353,6 +353,32 @@ describe("長い文書の塊", () => {
     expect(after[0]).not.toBe(before[0]);
   });
 
+  it.each([
+    ["URL", '[r]: https://example.org "元のタイトル"'],
+    ["タイトル", '[r]: https://example.com "新しいタイトル"'],
+  ])("末尾の参照リンク定義の%sが変わると、先頭の塊の key も変わる", async (_label, definition) => {
+    const { markdownChunks } = await import("./markdown");
+    const original = '[r]: https://example.com "元のタイトル"';
+    const src = doc(300).replace("[r]: https://example.com", original);
+    const before = markdownChunks(src, base, 200);
+    const after = markdownChunks(src.replace(original, definition), base, 200);
+    expect(before.length).toBeGreaterThan(1);
+    expect(after[0].key).not.toBe(before[0].key);
+  });
+
+  it("CR 改行でも、先頭の段落を変えると先頭の塊の key が変わる", async () => {
+    const { markdownChunks } = await import("./markdown");
+    const src = doc(300);
+    const cr = src.replace(/\n/g, "\r");
+    const before = markdownChunks(cr, base, 200);
+    const after = markdownChunks(cr.replace("段落 0 ", "段落 0 変更 "), base, 200);
+    expect(before.length).toBeGreaterThan(1);
+    expect(before[0].key).toBe(markdownChunks(src, base, 200)[0].key);
+    expect(before[0].key).toBe(markdownChunks(src.replace(/\n/g, "\r\n"), base, 200)[0].key);
+    expect(after[0].key).not.toBe(before[0].key);
+    expect(before.map((c) => c.html()).join("")).toBe(renderMarkdown(src, base));
+  });
+
   it("生 HTML はそれぞれの塊の中で無害化する", async () => {
     const { markdownChunks } = await import("./markdown");
     const src = `${"段落\n\n".repeat(200)}<div><img src=x onerror="alert(1)">\n\n${"後ろ\n\n".repeat(200)}`;

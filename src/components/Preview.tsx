@@ -10,6 +10,7 @@ import {
   localSrc,
   mathReady,
   markdownChunks,
+  RENDER_ALL,
   renderMermaidBlock,
 } from "../lib/markdown";
 import { confirmOpenUrl, copyText, safeDecode, statPaths } from "../lib/api";
@@ -44,8 +45,10 @@ type Props = {
   onRendered?: () => void;
   /** 待たずにすぐ反映する（入力中でないとき。外部での変更をすぐ表示するため） */
   immediate?: boolean;
-  /** 長い文書でも最初に全部描く（前回のスクロール位置へ戻すときなど） */
+  /** 長い文書でも毎回まとめて描く */
   eager?: boolean;
+  /** 前回のスクロール位置へ戻すため、初回はまとめて描く */
+  eagerOnMount?: boolean;
 };
 
 /** これより長い文書は、見える先頭から少しずつ描く（固まらないように） */
@@ -172,7 +175,7 @@ function lightboxMedia(image: HTMLImageElement | SVGSVGElement, animations: bool
 }
 
 /** Markdown のプレビュー。再描画してもスクロール位置は保たれる。 */
-function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, line, find, onFindResult, onRendered, immediate = false, eager = false }: Props) {
+function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScrolled, line, find, onFindResult, onRendered, immediate = false, eager = false, eagerOnMount = false }: Props) {
   const ref = useRef<HTMLElement>(null);
   const lastAnchorNonce = useRef<number>(undefined);
   const { settings } = useSettings();
@@ -197,7 +200,7 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
   const dom = useRef<{ els: HTMLElement[]; keys: string[]; complete: boolean; finishAll: () => void }>({
     els: [], keys: [], complete: true, finishAll: () => {},
   });
-  const eagerRef = useRef(eager);
+  const eagerOnMountRef = useRef(eagerOnMount);
   const onRenderedRef = useRef(onRendered);
   onRenderedRef.current = onRendered;
 
@@ -302,7 +305,7 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
       while (next < chunks.length) insert();
       finish();
     };
-    if (source.length < PROGRESSIVE_MIN || eagerRef.current) {
+    if (source.length < PROGRESSIVE_MIN || eager || eagerOnMountRef.current) {
       state.finishAll();
     } else {
       // まず見える分（時間の目安まで）を描き、残りは画面を止めないよう少しずつ
@@ -319,13 +322,24 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
       // 見出しの位置などは途中でも分かる範囲で知らせる
       onRenderedRef.current?.();
     }
-    eagerRef.current = false;
+    eagerOnMountRef.current = false;
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chunks]);
+  }, [chunks, eager]);
 
-  /** まだ入れていない塊があれば、すぐに全部入れる（見出しへの移動・検索の前） */
-  const renderAll = () => dom.current.finishAll();
+  /** まだ入れていない塊があれば、すぐに全部入れる */
+  const renderAll = useCallback(() => {
+    if (!dom.current.complete) dom.current.finishAll();
+  }, []);
+
+  useLayoutEffect(() => {
+    const onRenderAll = (event: Event) => {
+      const paneId = (event as CustomEvent<string | null>).detail;
+      if (paneId == null || ref.current?.closest(".pane")?.getAttribute("data-pane") === paneId) renderAll();
+    };
+    window.addEventListener(RENDER_ALL, onRenderAll);
+    return () => window.removeEventListener(RENDER_ALL, onRenderAll);
+  }, [renderAll]);
 
   // 別ファイルの見出しへのリンクで開いたとき、その見出しへ移動
   useEffect(() => {
@@ -337,8 +351,7 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     handledAnchors.add(anchor);
     target.scrollIntoView({ block: "start" });
     onAnchorScrolled?.();
-     
-  }, [anchor, rendered, onAnchorScrolled]);
+  }, [anchor, rendered, onAnchorScrolled, renderAll]);
 
   // フォルダ検索で開いた行へ移動し、一致箇所を一時的に強調する。
   useEffect(() => {
@@ -387,22 +400,21 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
       window.clearTimeout(timer);
       clear?.();
     };
-     
-  }, [id, line, rendered, source, scroller, onAnchorScrolled]);
+  }, [id, line, source, scroller, onAnchorScrolled, renderAll]);
 
   // ファイル内検索
   const query = find?.query ?? "";
+  const index = find?.index ?? 0;
   // 検索は全文が必要（長い文書の描画途中なら残りをすぐ描く）
   useLayoutEffect(() => {
     if (query) renderAll();
-     
-  }, [query, chunks]);
+  }, [query, chunks, renderAll]);
   const ranges = useMemo(
-    () => (ref.current && query ? findRanges(ref.current, query) : []),
+    () => (ref.current && query && !ref.current.dataset.rendering ? findRanges(ref.current, query) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [query, domVersion],
   );
-  const current = ranges.length ? ((find!.index % ranges.length) + ranges.length) % ranges.length : -1;
+  const current = ranges.length ? ((index % ranges.length) + ranges.length) % ranges.length : -1;
   useEffect(() => {
     setFindHighlights(id, ranges, current);
     const sc = scroller.current;
@@ -410,18 +422,22 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     onFindResult?.({ count: ranges.length, tops: ranges.slice(0, 2000).map((r) => r.getBoundingClientRect().top - base) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ranges, current]);
-  // 今の一致箇所が見えるようにスクロール（検索語や「次へ」が変わったときだけ）
+  // 検索語や移動先が変わったら、一致箇所がそろうまで移動を待つ。
+  const pendingFindScroll = useRef(false);
+  useEffect(() => {
+    pendingFindScroll.current = !!query;
+  }, [query, index]);
   useEffect(() => {
     const sc = scroller.current;
     const r = ranges[current];
-    if (!sc || !r) return;
+    if (!pendingFindScroll.current || !sc || !r) return;
+    pendingFindScroll.current = false;
     const box = r.getBoundingClientRect();
     const view = sc.getBoundingClientRect();
     if (box.top < view.top + 40 || box.bottom > view.bottom - 40) {
       sc.scrollTop += box.top - view.top - sc.clientHeight / 3;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, find?.index]);
+  }, [query, index, ranges, current, scroller]);
   useEffect(() => () => clearFindHighlights(id), [id]);
 
   const openLightbox = (target: Element) => {
@@ -463,9 +479,8 @@ function Preview({ id, path, content, scroller, onOpenLink, anchor, onAnchorScro
     const newTab = e.metaKey || e.ctrlKey;
     try {
       if (link.kind === "anchor") {
-        const target = ref.current && findAnchor(ref.current, link.hash);
-        if (!target) renderAll();
-        const jumpTo = target ?? (ref.current && findAnchor(ref.current, link.hash));
+        renderAll();
+        const jumpTo = ref.current && findAnchor(ref.current, link.hash);
         if (jumpTo) {
           // 「戻る」で戻れるよう、移る前の位置を記録してもらう（ペインが受け取る）
           ref.current?.dispatchEvent(new CustomEvent(BEFORE_JUMP, { bubbles: true }));
