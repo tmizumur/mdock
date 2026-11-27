@@ -17,10 +17,17 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   const [activeIdx, setActiveIdx] = useState("p0");
   const [openRequests] = useState(createOpenRequests);
   const lineNonce = useRef(0);
+  const scrollNonce = useRef(0);
   /** タブごとのスクロール位置（タブ ID → px） */
   const scrolls = useRef(new Map<string, number>());
+  const previewScrolls = useRef(new Map<string, number>());
+  const forgetScroll = (id: string) => {
+    scrolls.current.delete(id);
+    previewScrolls.current.delete(id);
+  };
   /** ペインごとの「戻る／進む」の履歴 */
   const nav = useRef(new Map<string, NavState>());
+  const navigating = useRef(new Set<string>());
 
   // イベントハンドラから最新の状態を読むための参照
   // ペインの状態は ref を正とし、変えるときは apply で ref と state を同時に更新する
@@ -67,7 +74,9 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   const navLocation = (paneId: string): NavLocation | undefined => {
     const p = wsRef.current.panes[paneId];
     const t = p && activeTab(p);
-    return t?.kind === "doc" ? { path: t.path, scroll: scrolls.current.get(t.id) ?? 0 } : undefined;
+    if (t?.kind !== "doc") return;
+    const positions = t.mode === "split" ? previewScrolls : scrolls;
+    return { tabId: t.id, path: t.path, scroll: positions.current.get(t.id) ?? 0 };
   };
   /** ページ内の見出しへ移る前に、今の位置を履歴に残す */
   const recordJump = (paneId: string) => {
@@ -75,25 +84,20 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     if (from) nav.current.set(paneId, recordNav(nav.current.get(paneId) ?? emptyNav(), from));
   };
   /** 戻る（-1）／進む（1） */
-  const navigate = (paneId: string, dir: -1 | 1) => {
+  const navigate = async (paneId: string, dir: -1 | 1) => {
     const id = livePane(paneId);
+    const pending = navigating.current;
+    if (pending.has(id)) return;
     const current = navLocation(id);
-    if (!current) return;
-    const r = (dir < 0 ? goBack : goForward)(nav.current.get(id) ?? emptyNav(), current);
+    const state = nav.current.get(id);
+    if (!current || !state) return;
+    const r = (dir < 0 ? goBack : goForward)(state, current);
     if (!r) return;
-    nav.current.set(id, r.state);
-    if (r.target.path === current.path) {
-      // 同じファイルの中: タブを作り直して（ID を変えて）スクロール位置を戻す
-      updatePane(id, (p) => {
-        const t = p.tabs[p.active];
-        if (t?.kind !== "doc") return p;
-        const next = { ...cloneTab(t), line: undefined } as DocTab;
-        scrolls.current.delete(t.id);
-        scrolls.current.set(next.id, r.target.scroll);
-        return { ...p, tabs: p.tabs.map((x, i) => (i === p.active ? next : x)) };
-      });
-    } else {
-      openFile(r.target.path, id, { noHistory: true, scroll: r.target.scroll });
+    pending.add(id);
+    try {
+      await openFile(r.target.path, id, { restore: r });
+    } finally {
+      pending.delete(id);
     }
   };
 
@@ -105,18 +109,32 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   const openFile = useCallback(
     async (path: string, paneId: string, opts: {
       newTab?: boolean; anchor?: string; line?: Omit<SearchLocation, "nonce">; split?: Side; at?: number;
-      /** 戻る／進むの履歴に残さない（戻る／進む自身の移動） */
-      noHistory?: boolean;
-      /** 開いたタブのスクロール位置（戻る／進むで使う） */
-      scroll?: number;
+      /** 戻る／進むで復元する位置 */
+      restore?: { target: NavLocation; state: NavState };
     } = {}) => {
       const anchor = opts.anchor ? { id: opts.anchor, nonce: Date.now() } : undefined;
       const line = opts.line ? { ...opts.line, nonce: ++lineNonce.current } : undefined;
+      const scrollTo = opts.restore && { top: opts.restore.target.scroll, nonce: ++scrollNonce.current };
+      const withScroll = (t: DocTab): DocTab => {
+        if (!scrollTo) return t;
+        if (t.mode === "view") scrolls.current.set(t.id, scrollTo.top);
+        if (t.mode === "split") previewScrolls.current.set(t.id, scrollTo.top);
+        return { ...t, scrollTo: t.mode === "edit" ? undefined : scrollTo };
+      };
       const withLocation = (p: PaneState, k: number) => ({
         ...p, active: k,
-        tabs: anchor || line ? p.tabs.map((t, i) => (i === k && t.kind === "doc" ? { ...t, anchor, line } : t)) : p.tabs,
+        tabs: anchor || line || scrollTo
+          ? p.tabs.map((t, i) => (i === k && t.kind === "doc" ? withScroll({ ...t, anchor, line, scrollTo: undefined }) : t))
+          : p.tabs,
       });
-      const has = (p: PaneState | undefined) => (p ? p.tabs.findIndex((t) => t.kind === "doc" && t.path === path) : -1);
+      const has = (p: PaneState) => {
+        const original = opts.restore?.target.tabId;
+        const k = original ? p.tabs.findIndex((t) => t.kind === "doc" && t.id === original) : -1;
+        if (k >= 0) return k;
+        const current = activeTab(p);
+        if (opts.restore && current?.kind === "doc" && current.path === path) return p.active;
+        return p.tabs.findIndex((t) => t.kind === "doc" && t.path === path);
+      };
       const read = async (): Promise<DocTab> => {
         const { info, error } = await readTextResult(path);
         const text = info?.text ?? "";
@@ -135,25 +153,26 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         return;
       }
       const pane = wsRef.current.panes[id];
+      const history = nav.current.get(id);
       const previous = activeTab(pane)?.id;
-      // 今のタブのまま別のファイル（または見出し）へ移るなら、移る前の位置を履歴に残す
-      const from = !opts.noHistory && !opts.newTab && opts.at === undefined ? navLocation(id) : undefined;
-      const record = () => {
-        if (from && (from.path !== path || anchor || line)) nav.current.set(id, recordNav(nav.current.get(id) ?? emptyNav(), from));
-      };
-      if (has(pane) < 0) {
-        const tab = await read();
-        if (opts.scroll !== undefined) scrolls.current.set(tab.id, opts.scroll);
+      const k = has(pane);
+      const shouldRecord = !opts.restore && opts.at === undefined;
+      let from = shouldRecord ? navLocation(id) : undefined;
+      if (k < 0) {
+        const loaded = await read();
         const status = requestStatus();
         const latest = status === "latest";
         const insert = opts.newTab || opts.at !== undefined;
         if (status === "cleared" || (!latest && !insert) || !wsRef.current.panes[id]) return;
+        if (opts.restore && nav.current.get(id) !== history) return;
+        if (shouldRecord && latest) from = navLocation(id);
         updatePane(id, (p) => {
           const k = has(p);
           if (k >= 0) return latest ? withLocation(p, k) : p;
+          const tab = withScroll(loaded);
           const cur = p.tabs[p.active];
           if (!insert && cur?.kind === "doc" && cur.id === previous && !isDirty(cur)) {
-            scrolls.current.delete(cur.id);
+            forgetScroll(cur.id);
             return { ...p, tabs: p.tabs.map((t, i) => (i === p.active ? tab : t)) };
           }
           const at = Math.max(0, Math.min(opts.at ?? (p.tabs.length ? p.active + 1 : 0), p.tabs.length));
@@ -163,11 +182,13 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
         });
         if (!latest) return;
       } else {
-        const existing = pane.tabs[has(pane)];
-        if (opts.scroll !== undefined) scrolls.current.set(existing.id, opts.scroll);
-        updatePane(id, (p) => withLocation(p, has(p)));
+        updatePane(id, (p) => withLocation(p, k));
       }
-      record();
+      if (opts.restore) {
+        nav.current.set(id, opts.restore.state);
+      } else if (from && (from.tabId !== activeTab(wsRef.current.panes[id])?.id || anchor || line)) {
+        nav.current.set(id, recordNav(nav.current.get(id) ?? emptyNav(), from));
+      }
       focusPane(id);
       setError(null);
     },
@@ -216,8 +237,11 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   /** すべてのタブを閉じる（分割の形はそのまま） */
   const clearTabs = useCallback(() => {
     openRequests.clear();
+    nav.current.clear();
+    navigating.current = new Set();
     apply((w) => mapPanes(w, () => emptyPane()));
     scrolls.current.clear();
+    previewScrolls.current.clear();
   }, [apply, openRequests]);
 
 
@@ -314,9 +338,10 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     const t = wsRef.current.panes[paneId]?.tabs[tabIdx];
     if (!t) return;
     if (!(await confirmDirty([t]))) return;
-    scrolls.current.delete(t.id);
+    forgetScroll(t.id);
     apply((w) => {
       const r = closeTabIn(w, paneId, t.id, activeRef.current);
+      if (!r.w.panes[paneId]?.tabs.length) nav.current.delete(paneId);
       if (r.focus) focusPane(r.focus);
       return r.w;
     });
@@ -338,7 +363,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
     const others = p.tabs.filter((_, i) => i !== keepIdx);
     if (!(await confirmDirty(others))) return;
     const keep = p.tabs[keepIdx];
-    others.forEach((t) => scrolls.current.delete(t.id));
+    others.forEach((t) => forgetScroll(t.id));
     updatePane(paneId, (q) => ({ tabs: q.tabs.filter((t) => t.id === keep.id), active: 0 }));
   };
 
@@ -417,7 +442,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   });
 
   const applyLayoutChange = ({ w, focus, discardedTabIds }: ReturnType<typeof resetLayoutIn>) => {
-    for (const id of discardedTabIds ?? []) scrolls.current.delete(id);
+    for (const id of discardedTabIds ?? []) forgetScroll(id);
     apply(() => w);
     if (focus) focusPane(focus);
   };
@@ -468,7 +493,7 @@ export function useWorkspace(ask: ReturnType<typeof useUnsavedDialog>["ask"], se
   };
 
   return {
-    ws, wsRef, apply, activeIdx, activeRef, order, scrolls, focusPane, livePane,
+    ws, wsRef, apply, activeIdx, activeRef, order, scrolls, previewScrolls, focusPane, livePane,
     updatePane, updateActiveTab, openFile, retryRead, confirmDirty, clearTabs, saveTab,
     closeTab, closeActiveTab, closeOthers, moveTab, splitTab, splitWith, cycleTab, navigate, recordJump,
     otherPane, compareWithOther, resetLayout, toggleSplit, onRenamed, onTreeOpen, onSplitResized,

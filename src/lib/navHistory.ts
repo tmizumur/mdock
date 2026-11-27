@@ -1,6 +1,6 @@
 /** ペインごとの「戻る／進む」（リンクやツリーでの移動の履歴） */
 
-export type NavLocation = { path: string; scroll: number };
+export type NavLocation = { path: string; scroll: number; tabId?: string };
 export type NavState = { back: NavLocation[]; forward: NavLocation[] };
 
 /** ページ内リンクで移動する直前にプレビューが出すイベント（戻る／進むの履歴用） */
@@ -14,7 +14,7 @@ export const emptyNav = (): NavState => ({ back: [], forward: [] });
 /** 移動する前の位置を記録する（進む履歴は消える） */
 export function recordNav(state: NavState, from: NavLocation): NavState {
   const last = state.back[state.back.length - 1];
-  const same = last && last.path === from.path && Math.abs(last.scroll - from.scroll) < 1;
+  const same = last && last.tabId === from.tabId && last.path === from.path && Math.abs(last.scroll - from.scroll) < 1;
   const back = same ? state.back : [...state.back, from].slice(-LIMIT);
   return { back, forward: [] };
 }

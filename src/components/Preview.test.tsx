@@ -5,7 +5,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILES_CHANGED } from "../lib/liveReload";
+import type { DocTab } from "../lib/tabs";
 import Preview from "./Preview";
+import PreviewPane from "./PreviewPane";
 
 describe("Markdown プレビュー", () => {
   let host: HTMLDivElement;
@@ -68,6 +70,32 @@ describe("Markdown プレビュー", () => {
     expect(scrollIntoView.mock.contexts.map((target) => (target as HTMLElement).id))
       .toEqual(["日本語の-見出し", "c--rust", "fn1", "fnref1"]);
     expect(onOpenLink).not.toHaveBeenCalled();
+  });
+
+  it("同じプレビューを保ったまま履歴のスクロール位置へ移動する", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    const tab: DocTab = { id: "note", kind: "doc", path: "/workspace/note.md", content: "# Note", saved: "# Note", mode: "view" };
+    const noop = () => {};
+    const showPane = (current: DocTab, key = current.id) => act(() => root.render(
+      <PreviewPane key={key} id="preview" tab={current} initialScroll={0} onScroll={noop}
+        find={{ open: false, query: "", index: 0, focus: 0 }} setFind={noop} onOutline={noop} onOpenLink={onOpenLink} />,
+    ));
+
+    showPane(tab);
+    const body = host.querySelector<HTMLDivElement>(".pane-body")!;
+    body.scrollTop = 180;
+    showPane({ ...tab, scrollTo: { top: 0, nonce: 1 } });
+    expect(host.querySelector(".pane-body")).toBe(body);
+    expect(body.scrollTop).toBe(0);
+
+    const restored = { ...tab, scrollTo: { top: 180, nonce: 2 } };
+    showPane(restored);
+    expect(body.scrollTop).toBe(180);
+    showPane(restored, "remount");
+    expect(host.querySelector<HTMLDivElement>(".pane-body")?.scrollTop).toBe(0);
   });
 
   it("変更されたローカル画像だけを更新し、Markdown の再描画後も新しい URL を使う", () => {

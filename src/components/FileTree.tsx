@@ -204,7 +204,7 @@ export default function FileTree({ root, entries, openPaths, activePath, onOpen,
     } else if (ev.key === "Enter") {
       ev.preventDefault();
       if (row.entry.is_dir) toggle(row.entry, row.depth);
-      else onOpen(row.entry.path, ev.metaKey || ev.ctrlKey, ev.altKey);
+      else onOpen(row.entry.path, ev.metaKey, ev.altKey);
     } else if (ev.key === "Backspace" && ev.metaKey) {
       ev.preventDefault();
       trash(row.entry.path);
@@ -213,16 +213,20 @@ export default function FileTree({ root, entries, openPaths, activePath, onOpen,
 
   // 操作中のペインのファイルが変わったら、ツリーの選択も合わせる（親フォルダを開いて、見える位置までスクロール）
   const reveal = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activePath || document.activeElement === scroller.current) return;
+  useLayoutEffect(() => {
+    reveal.current = null;
     const base = norm(root).replace(/\/+$/, "");
-    const path = norm(activePath);
-    if (!path.startsWith(base + "/")) return;
+    const path = activePath && norm(activePath);
+    if (!activePath || !path?.startsWith(base + "/")) {
+      setSelected(null);
+      return;
+    }
     setSelected(activePath);
     const parents: string[] = [];
     for (let d = dirname(path); d.length > base.length; d = dirname(d)) parents.unshift(d);
     if (parents.length) {
-      setOpen((o) => (parents.every((d) => o[d]) ? o : { ...o, ...Object.fromEntries(parents.map((d) => [d, true])) }));
+      setOpen((o) => (parents.every((d, depth) => isFolderOpen(d, depth, o, expandTop))
+        ? o : { ...o, ...Object.fromEntries(parents.map((d) => [d, true])) }));
       // まだ読んでいないフォルダは読む（大きなフォルダの遅延読み込み）
       const unloaded = (list: Entry[]): void => {
         for (const e of list) {
@@ -233,7 +237,7 @@ export default function FileTree({ root, entries, openPaths, activePath, onOpen,
       };
       unloaded(entriesRef.current);
     }
-    reveal.current = activePath;
+    if (!scroller.current?.contains(document.activeElement)) reveal.current = activePath;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, root]);
   useLayoutEffect(() => {
@@ -242,9 +246,9 @@ export default function FileTree({ root, entries, openPaths, activePath, onOpen,
     const i = indexOf(target);
     if (i < 0) return; // 親フォルダの読み込みを待つ
     reveal.current = null;
-    virt.scrollToIndex(i, { align: "auto" });
+    if (!scroller.current?.contains(document.activeElement)) virt.scrollToIndex(i, { align: "auto" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows]);
+  }, [activePath, root, rows]);
 
   const createInSelection = (isDir: boolean) => {
     const row = rows[indexOf(selected)];

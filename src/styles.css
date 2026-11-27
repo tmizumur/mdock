@@ -397,6 +397,10 @@ button.outline-toggle:hover { color: var(--fg); }
   .find-bar input { flex: 1 1 auto; width: 0; }
   .find-count { min-width: 0; }
 }
+@container (max-width: 200px) {
+  .find-bar { flex-wrap: wrap; }
+  .find-bar input { min-width: 0; flex-basis: 100%; }
+}
 
 /* 読んでいる位置（右端の細い帯） */
 .ruler {
@@ -503,6 +507,7 @@ button.outline-toggle:hover { color: var(--fg); }
 .split-col { flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; }
 .split-col + .split-col { border-left: 1px solid var(--border); }
 .split-col.editor-body { height: 100%; }
+.split-col.split-preview { container-type: inline-size; }
 .split-preview:focus, .split-preview:focus-visible { outline: none; }
 
 /* 差分 */

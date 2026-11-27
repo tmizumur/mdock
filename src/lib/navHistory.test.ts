@@ -30,6 +30,17 @@ describe("戻る／進む", () => {
     expect(s.back).toHaveLength(1);
   });
 
+  it("同じファイルの同じ位置でも別のタブなら履歴に残す", () => {
+    const first = { ...a, tabId: "first" };
+    const second = { ...a, tabId: "second" };
+    const state = recordNav(recordNav(emptyNav(), first), second);
+    const back = goBack(state, b)!;
+    const backAgain = goBack(back.state, second)!;
+    expect(back.target).toEqual(second);
+    expect(backAgain.target).toEqual(first);
+    expect(goForward(backAgain.state, first)?.target).toEqual(second);
+  });
+
   it("履歴は 100 件まで（古いものから捨てる）", () => {
     let s = emptyNav();
     for (let i = 0; i < 120; i++) s = recordNav(s, { path: `/w/${i}.md`, scroll: 0 });

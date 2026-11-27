@@ -72,6 +72,87 @@ describe("ワークスペースの読み込みと保存", () => {
     vi.unstubAllGlobals();
   });
 
+  it("戻り先を読み込み中は同じペインの履歴操作を受け付けない", async () => {
+    vi.mocked(readTextResult).mockResolvedValue(success("本文"));
+    await act(() => workspace.openFile("/a.md", "p0"));
+    await act(() => workspace.openFile("/b.md", "p0"));
+    await act(() => workspace.openFile("/c.md", "p0"));
+    let finish!: (result: TextReadResult) => void;
+    vi.mocked(readTextResult).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+
+    let back!: Promise<void>;
+    await act(async () => {
+      back = workspace.navigate("p0", -1);
+      await workspace.navigate("p0", -1);
+      await workspace.navigate("p0", 1);
+    });
+    expect(activeDoc().path).toBe("/c.md");
+    expect(readTextResult).toHaveBeenCalledTimes(4);
+    await act(async () => {
+      finish(success("本文"));
+      await back;
+    });
+    expect(activeDoc().path).toBe("/b.md");
+    await act(() => workspace.navigate("p0", 1));
+    expect(activeDoc().path).toBe("/c.md");
+    await act(() => workspace.navigate("p0", 1));
+    expect(readTextResult).toHaveBeenCalledTimes(5);
+  });
+
+  it("新しいタブへ移動した履歴は元のタブを選び直す", async () => {
+    vi.mocked(readTextResult).mockResolvedValue(success("本文"));
+    await act(() => workspace.openFile("/a.md", "p0"));
+    const first = { ...activeDoc(), id: "duplicate" };
+    act(() => workspace.updatePane("p0", (p) => ({ tabs: [...p.tabs, first], active: 1 })));
+    workspace.scrolls.current.set(first.id, 120);
+    await act(() => workspace.openFile("/b.md", "p0", { newTab: true }));
+    const second = activeDoc();
+
+    await act(() => workspace.navigate("p0", -1));
+    expect(activeDoc()).toMatchObject({ id: first.id, scrollTo: { top: 120 } });
+    await act(() => workspace.navigate("p0", 1));
+    expect(activeDoc().id).toBe(second.id);
+    expect(readTextResult).toHaveBeenCalledTimes(2);
+  });
+
+  it("同じファイル内ではタブを保ち、戻る・進むごとにスクロール先を更新する", async () => {
+    vi.mocked(readTextResult).mockResolvedValue(success("本文"));
+    await act(() => workspace.openFile("/a.md", "p0"));
+    const { id } = activeDoc();
+    workspace.recordJump("p0");
+    workspace.scrolls.current.set(id, 180);
+
+    await act(() => workspace.navigate("p0", -1));
+    expect(activeDoc()).toMatchObject({ id, scrollTo: { top: 0 } });
+    const previous = activeDoc().scrollTo?.nonce;
+    await act(() => workspace.navigate("p0", 1));
+    expect(activeDoc()).toMatchObject({ id, scrollTo: { top: 180 } });
+    expect(activeDoc().scrollTo?.nonce).not.toBe(previous);
+    expect(readTextResult).toHaveBeenCalledOnce();
+  });
+
+  it("全タブを閉じると履歴と読み込み中の履歴移動が消える", async () => {
+    vi.mocked(readTextResult).mockResolvedValue(success("本文"));
+    await act(() => workspace.openFile("/a.md", "p0"));
+    await act(() => workspace.openFile("/b.md", "p0"));
+    let finish!: (result: TextReadResult) => void;
+    vi.mocked(readTextResult).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+
+    let back!: Promise<void>;
+    act(() => {
+      back = workspace.navigate("p0", -1);
+      workspace.clearTabs();
+    });
+    await act(() => workspace.openFile("/new.md", "p0"));
+    await act(async () => {
+      finish(success("本文"));
+      await back;
+      await workspace.navigate("p0", -1);
+    });
+    expect(activeDoc().path).toBe("/new.md");
+    expect(readTextResult).toHaveBeenCalledTimes(4);
+  });
+
   it("新しい ⌘+クリックが先に完了したとき、古い要求ではペインを増やさない", async () => {
     let finishFirst!: (result: TextReadResult) => void;
     vi.mocked(readTextResult)
