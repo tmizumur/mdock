@@ -321,17 +321,24 @@ md.core.ruler.after("inline", "task-list", (state) => {
   return true;
 });
 
-export function renderMarkdown(src: string, base?: string) {
-  const tokens = md.parse(src, { base });
-  const render = (from: number, to?: number, sanitizeDocument = false) =>
-    md.renderer.render(tokens.slice(from, to), md.options, { base, sanitizeDocument } satisfies Env);
+export type MarkdownChunk = {
+  /** 同じなら同じ HTML になる目印（元の Markdown の該当部分と、その開始行など） */
+  key: string;
+  /** その部分の HTML（必要になったときに作る） */
+  html: () => string;
+};
+
+/** トークンの範囲を HTML にする。生 HTML を含む最上位のブロックだけを無害化する */
+function renderRange(tokens: ReturnType<typeof md.parse>, from: number, to: number, base?: string) {
+  const render = (a: number, b: number, sanitizeDocument = false) =>
+    md.renderer.render(tokens.slice(a, b), md.options, { base, sanitizeDocument } satisfies Env);
   let html = "";
-  let start = 0;
-  let blockStart = 0;
+  let start = from;
+  let blockStart = from;
   let depth = 0;
   let hasRawHtml = false;
-  // 生 HTML を含む最上位のブロックだけを無害化する。
-  for (const [i, token] of tokens.entries()) {
+  for (let i = from; i < to; i++) {
+    const token = tokens[i];
     hasRawHtml ||= token.type === "html_block" ||
       (token.children?.some((child) => child.type === "html_inline") ?? false);
     depth += token.nesting;
@@ -340,14 +347,65 @@ export function renderMarkdown(src: string, base?: string) {
     if (hasRawHtml) {
       html += render(start, blockStart);
       const clean = sanitizeHtmlBlock(render(blockStart, end, true));
-      if (clean === null) return html + sanitizeMarkdown(render(blockStart, undefined, true));
+      // HTML が後ろのブロックまで続いている: この範囲の残りをまとめて無害化する
+      if (clean === null) return html + sanitizeMarkdown(render(blockStart, to, true));
       html += clean;
       start = end;
       hasRawHtml = false;
     }
     blockStart = end;
   }
-  return html + render(start);
+  return html + render(start, to);
+}
+
+export function renderMarkdown(src: string, base?: string) {
+  const tokens = md.parse(src, { base });
+  return renderRange(tokens, 0, tokens.length, base);
+}
+
+/**
+ * 長い文書を少しずつ描くために、Markdown を最上位のブロックの区切りで塊に分ける。
+ * 解析は全体で1回だけ行い、各塊の HTML は必要になったときに作る。
+ * 塊は前から数えて chunkTokens 個ほどのトークンごとに区切るので、末尾への追記では前の塊の key は変わらない
+ * （最後の塊は脚注などを含むため毎回作り直す）。
+ * 各塊は別々の要素に innerHTML で入れること（無害化は塊ごとに完結している）。
+ */
+export function markdownChunks(src: string, base?: string, chunkTokens = 1500): MarkdownChunk[] {
+  const env: Record<string, unknown> = { base };
+  const tokens = md.parse(src, env);
+  const normalized = src.replace(/\r\n?/g, "\n");
+  const lineStarts = [0];
+  for (let i = normalized.indexOf("\n"); i >= 0; i = normalized.indexOf("\n", i + 1)) lineStarts.push(i + 1);
+  const offset = (line: number) => lineStarts[line] ?? normalized.length;
+  // 参照リンクの定義や脚注は文書のどこにあっても前の部分の表示に効くので、その一覧も目印に含める
+  const refs = JSON.stringify(env.references ?? {});
+  const notes = JSON.stringify((env.footnotes as { refs?: object } | undefined)?.refs ?? {});
+  const prefix = `${mathPlugin ? 1 : 0}|${base ?? ""}|${refs}|${notes}|`;
+  const ranges: [number, number][] = [];
+  let chunkStart = 0;
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    depth += tokens[i].nesting;
+    if (depth === 0 && i + 1 - chunkStart >= chunkTokens) {
+      ranges.push([chunkStart, i + 1]);
+      chunkStart = i + 1;
+    }
+  }
+  if (chunkStart < tokens.length || !ranges.length) ranges.push([chunkStart, tokens.length]);
+  const firstLine = (a: number, b: number) => {
+    for (let i = a; i < b; i++) if (tokens[i].map) return tokens[i].map![0];
+    return undefined;
+  };
+  return ranges.map(([a, b], k) => {
+    let cache: string | undefined;
+    const last = k === ranges.length - 1;
+    const from = firstLine(a, b);
+    const to = last ? undefined : firstLine(ranges[k + 1][0], ranges[k + 1][1]);
+    const key = last || from === undefined || to === undefined
+      ? `${prefix}last:${Math.random()}`
+      : `${prefix}${from}:${normalized.slice(offset(from), offset(to))}`;
+    return { key, html: () => (cache ??= renderRange(tokens, a, b, base)) };
+  });
 }
 
 /** Markdown の見出しと元の行番号（編集モードのアウトライン用）。 */
@@ -474,6 +532,8 @@ export async function renderMermaidBlock(block: HTMLElement): Promise<void> {
     leftover?.parentNode?.removeChild(leftover);
   }
 }
+
+export const RENDER_ALL = "mdock:render-all";
 
 /** 印刷の前に、まだ描いていないコードの色付け・図・画像をすべて描いておく */
 export async function renderAllPending(root: HTMLElement): Promise<void> {

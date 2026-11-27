@@ -17,6 +17,8 @@ export function useOutline(scroller: React.RefObject<HTMLDivElement | null>, ver
     raf.current = requestAnimationFrame(() => {
       const sc = scroller.current;
       if (!sc) return;
+      // 長い文書を少しずつ描いている間は測らない（描き終えたら version が変わって測り直す）
+      if (sc.querySelector(".markdown-body[data-rendering]")) return;
       const base = sc.getBoundingClientRect().top - sc.scrollTop;
       const hs = Array.from(sc.querySelectorAll<HTMLElement>(".markdown-body :is(h1, h2, h3, h4, h5, h6)")).map((el) => ({
         level: Number(el.tagName[1]),
