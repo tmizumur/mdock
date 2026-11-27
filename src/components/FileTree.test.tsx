@@ -81,4 +81,14 @@ describe("ファイルツリーの選択同期", () => {
     });
     expect(onOpen.mock.calls).toEqual([[b.path, false, false], [b.path, true, false]]);
   });
+
+  it("ファイルのダブルクリックは 1 回目で開き、2 回目で固定する", () => {
+    show(a.path);
+    const row = tree().querySelector('[aria-selected="true"]')!;
+    act(() => {
+      row.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+    });
+    expect(onOpen.mock.calls).toEqual([[a.path, false, false], [a.path, false, false, "pin"]]);
+  });
 });

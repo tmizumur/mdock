@@ -24,6 +24,7 @@ export type DocTab = {
   /** ディスク上の内容（未保存の判定に使う） */
   saved: string;
   mode: ViewMode;
+  preview?: boolean;
   encoding?: string;
   bom?: boolean;
   /** BOM を編集した下書きの比較元 */
@@ -104,6 +105,22 @@ export const emptyPane = (): PaneState => ({ tabs: [], active: 0 });
 export const activeTab = (p: PaneState): Tab | undefined => p.tabs[p.active];
 export const isDirty = (t: Tab | undefined): boolean => !!t && t.kind === "doc" &&
   (t.content !== t.saved || (t.savedBom !== undefined && t.savedBom !== !!t.bom));
+export const isPreview = (t: Tab): boolean => t.kind === "doc" && t.preview === true;
+export const pinTab = <T extends Tab>(t: T): T => isPreview(t) ? { ...t, preview: undefined } : t;
+export const settlePreview = (t: Tab): Tab => t.kind === "doc" && (t.mode !== "view" || isDirty(t)) ? pinTab(t) : t;
+
+/** 表示専用の仮のタブを、ペインごとに最後の 1 つだけ残す。 */
+export function settlePanePreviews(p: PaneState, enabled = true): PaneState {
+  let keepPreview = enabled;
+  let tabs: Tab[] | undefined;
+  for (let i = p.tabs.length - 1; i >= 0; i--) {
+    const t = p.tabs[i];
+    const next = keepPreview ? settlePreview(t) : pinTab(t);
+    if (isPreview(next)) keepPreview = false;
+    if (next !== t) (tabs ??= [...p.tabs])[i] = next;
+  }
+  return tabs ? { ...p, tabs } : p;
+}
 export const baseName = (p: string) => p.replace(/\\/g, "/").split("/").pop() ?? p;
 export const tabTitle = (t: Tab) => (t.kind === "doc" ? baseName(t.path) : `${baseName(t.left)} ↔ ${baseName(t.right)}`);
 
@@ -114,6 +131,7 @@ export type SavedTab =
       kind?: "doc";
       path: string;
       mode: ViewMode;
+      preview?: boolean;
       scroll: number;
       encoding?: string;
       bom?: boolean;

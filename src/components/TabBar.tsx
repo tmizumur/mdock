@@ -1,6 +1,6 @@
 import { type ReactNode, useLayoutEffect, useRef } from "react";
 import { GitCompare } from "lucide-react";
-import { type PaneState, isDirty, tabTitle } from "../lib/tabs";
+import { type PaneState, isDirty, isPreview, tabTitle } from "../lib/tabs";
 import { TreeIcon, fileIcon } from "../lib/fileIcons";
 import { beginDrag, useDrag } from "../lib/dnd";
 
@@ -10,6 +10,7 @@ type Props = {
   actions?: ReactNode;
   onActivate: (idx: number) => void;
   onClose: (idx: number) => void;
+  onPin: (tabId: string) => void;
   onContextMenu: (idx: number, x: number, y: number) => void;
 };
 
@@ -17,7 +18,7 @@ type Props = {
  * ペインの上のタブ。中クリックで閉じる。
  * ドラッグで並べ替え・ほかのペインへ移動・ペインの端に落として分割（移動の処理は App の setDropHandler）。
  */
-export default function TabBar({ paneId, pane, actions, onActivate, onClose, onContextMenu }: Props) {
+export default function TabBar({ paneId, pane, actions, onActivate, onClose, onPin, onContextMenu }: Props) {
   const drag = useDrag();
   const dropAt = drag.target?.type === "tabbar" && drag.target.paneId === paneId ? drag.target.index : null;
   const draggingId = drag.item?.kind === "tab" ? drag.item.tabId : null;
@@ -69,13 +70,14 @@ export default function TabBar({ paneId, pane, actions, onActivate, onClose, onC
       <div className="tab-strip" role="tablist" ref={barRef}>
         {pane.tabs.map((t, i) => {
           const dirty = isDirty(t);
+          const preview = isPreview(t);
           return (
             <div
               key={t.id}
               data-tab-id={t.id}
               role="tab"
               aria-selected={i === pane.active}
-              className={`tab ${i === pane.active ? "on" : ""} ${draggingId === t.id ? "dragging" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
+              className={`tab ${preview ? "preview" : ""} ${i === pane.active ? "on" : ""} ${draggingId === t.id ? "dragging" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === pane.tabs.length && i === pane.tabs.length - 1 ? "drop-after" : ""}`}
               title={t.kind === "doc" ? t.path : `${t.left}\n↔ ${t.right}`}
               onPointerDown={(e) => {
                 if ((e.target as HTMLElement).closest(".tab-close")) return;
@@ -83,6 +85,9 @@ export default function TabBar({ paneId, pane, actions, onActivate, onClose, onC
               }}
               onMouseDown={(e) => {
                 if (e.button === 0) onActivate(i);
+              }}
+              onDoubleClick={(e) => {
+                if (preview && !(e.target as HTMLElement).closest(".tab-close")) onPin(t.id);
               }}
               onAuxClick={(e) => {
                 if (e.button === 1) {

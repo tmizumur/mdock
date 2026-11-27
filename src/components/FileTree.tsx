@@ -15,7 +15,7 @@ type Props = {
   openPaths: string[];
   /** 操作中のペインで表示しているファイル（ツリーの選択をこれに合わせる） */
   activePath?: string;
-  onOpen: (path: string, otherPane: boolean, newTab: boolean) => void;
+  onOpen: (path: string, otherPane: boolean, newTab: boolean, action?: "pin" | "create") => void;
   onLoadDirectory: (dir: string) => void;
   /** ファイルを作った・消したなど、ツリーを読み直してほしいとき */
   onChanged: () => void;
@@ -117,7 +117,7 @@ export default function FileTree({ root, entries, openPaths, activePath, onOpen,
       const path = await createEntry(c.dir, name, c.isDir);
       setSelected(path);
       onChanged();
-      if (!c.isDir) onOpen(path, false, false);
+      if (!c.isDir) onOpen(path, false, false, "create");
     } catch (e) {
       onError(`作成できませんでした: ${e}`);
     }
@@ -312,6 +312,7 @@ export default function FileTree({ root, entries, openPaths, activePath, onOpen,
                       onClick={(ev) => {
                         setSelected(r.entry.path);
                         if (r.entry.is_dir) toggle(r.entry, r.depth);
+                        else if (ev.detail > 1) onOpen(r.entry.path, ev.metaKey || ev.ctrlKey, ev.altKey, "pin");
                         else onOpen(r.entry.path, ev.metaKey || ev.ctrlKey, ev.altKey);
                       }}
                       onContextMenu={(ev) => openMenu(ev, r.entry)}

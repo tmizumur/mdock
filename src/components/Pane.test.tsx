@@ -49,6 +49,7 @@ it.each(modes)("%s のとき、現在の表示モードを示し、別のモー�
       onFocus={noop}
       onActivateTab={noop}
       onCloseTab={noop}
+      onPinTab={noop}
       onTabMenu={noop}
       onChange={noop}
       onMode={onMode}

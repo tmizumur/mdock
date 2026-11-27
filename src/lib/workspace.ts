@@ -1,5 +1,5 @@
 import { type LayoutNode, type PresetLayout, type SplitNode, PRESET_COUNT, flipOuter, leaves, newNodeId, presetLayout, removeLeaf } from "./layout";
-import { type PaneState, type Tab, emptyPane, isDirty, newId } from "./tabs";
+import { type PaneState, type Tab, emptyPane, isDirty, isPreview, newId, pinTab } from "./tabs";
 
 /** ペインの集まりと、その並べ方（分割ツリー） */
 export type Workspace = { panes: Record<string, PaneState>; layout: LayoutNode };
@@ -80,9 +80,13 @@ export function resetLayoutIn(
     if (keep.includes(id)) continue;
     for (const t of w.panes[id].tabs) {
       // 同じファイルを未編集で開いているだけなら、まとめる
-      const dup = t.kind === "doc" && !isDirty(t) && tabs.some((x) => x.kind === "doc" && x.path === t.path);
-      if (dup) discardedTabIds.push(t.id);
-      else tabs.push(t);
+      const k = t.kind === "doc" && !isDirty(t) ? tabs.findIndex((x) => x.kind === "doc" && x.path === t.path) : -1;
+      if (k < 0) tabs.push(t);
+      else {
+        discardedTabIds.push(t.id);
+        // 固定のタブをまとめるときは、残す方も固定する
+        if (!isPreview(t)) tabs[k] = pinTab(tabs[k]);
+      }
     }
   }
   panes[sink] = { tabs, active: Math.min(s.active, Math.max(0, tabs.length - 1)) };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { presetLayout } from "./layout";
 import { type DocTab, emptyPane } from "./tabs";
-import { type Workspace, closeTabIn, dropIfEmpty } from "./workspace";
+import { type Workspace, closeTabIn, dropIfEmpty, resetLayoutIn } from "./workspace";
 
 const tab: DocTab = { kind: "doc", id: "notes", path: "/notes.md", mode: "view", content: "", saved: "" };
 
@@ -26,5 +26,19 @@ describe("タブを閉じた後のペイン", () => {
     };
 
     expect(dropIfEmpty(w, "main")).toEqual({ w });
+  });
+});
+
+describe("ペインをまとめるとき", () => {
+  it("同じファイルの固定のタブと仮のタブをまとめたら、残したタブを固定する", () => {
+    const w: Workspace = {
+      layout: presetLayout("cols2", ["left", "right"]),
+      panes: { left: { tabs: [tab], active: 0 }, right: { tabs: [{ ...tab, id: "copy", preview: true }], active: 0 } },
+    };
+    const right = resetLayoutIn(w, "right");
+    expect(right.w.panes.right.tabs).toEqual([{ ...tab, id: "copy", preview: undefined }]);
+    expect(right.discardedTabIds).toEqual(["notes"]);
+    const left = resetLayoutIn(w, "left");
+    expect(left.w.panes.left.tabs).toEqual([tab]);
   });
 });

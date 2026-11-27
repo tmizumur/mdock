@@ -23,6 +23,8 @@ export type Settings = {
   autoUpdate: boolean;
   /** ツリーに git の変更状態を出す */
   gitStatus: boolean;
+  /** ツリーなどから仮のタブで開く */
+  previewTabs: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editorFont: "mono",
   autoUpdate: true,
   gitStatus: true,
+  previewTabs: true,
 };
 export const FONT_MIN = 10;
 export const FONT_MAX = 28;

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type TextInfo, readTextResult } from "./api";
-import { restorePane } from "./session";
-import { type SavedTab, isDirty, migrateSession, receiveDocText } from "./tabs";
+import { restorePane, saveTabState } from "./session";
+import { type DocTab, type SavedTab, isDirty, isPreview, migrateSession, receiveDocText } from "./tabs";
 
 vi.mock("./api", () => ({ readTextResult: vi.fn() }));
 
@@ -15,6 +15,27 @@ async function restoreDoc(tab: SavedTab) {
   if (doc?.kind !== "doc") throw new Error("タブを復元できませんでした");
   return doc;
 }
+
+describe("仮のタブの保存と復元", () => {
+  const tab: DocTab = { id: "note", kind: "doc", path: "/note.md", content: "本文", saved: "本文", mode: "view", preview: true };
+
+  beforeEach(() => vi.mocked(readTextResult).mockResolvedValue({ info: textInfo("本文") }));
+
+  it("仮のタブだけに preview を書き出し、旧セッションのタブは固定して復元する", async () => {
+    const preview = saveTabState(tab, 24);
+    expect(preview).toMatchObject({ preview: true, scroll: 24 });
+    expect(saveTabState({ ...tab, preview: false }, 0)).not.toHaveProperty("preview");
+    expect(await restoreDoc(preview)).toMatchObject({ preview: true });
+    expect(isPreview(await restoreDoc({ ...savedTab, mode: "view" }))).toBe(false);
+  });
+
+  it("複数の仮のタブが保存されていても、最後の 1 つだけを残す", async () => {
+    const tabs = [saveTabState(tab, 0), saveTabState({ ...tab, path: "/other.md" }, 0)];
+    const pane = await restorePane({ tabs, active: 0 }, new Map());
+    expect(pane.tabs.map(isPreview)).toEqual([false, true]);
+    expect(pane.active).toBe(0);
+  });
+});
 
 describe("下書きの復元", () => {
   beforeEach(() => vi.resetAllMocks());

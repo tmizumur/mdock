@@ -4,8 +4,8 @@ import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 import { type useUnsavedDialog } from "../components/Dialogs";
 import { cancelQuit, saveSession } from "../lib/api";
 import { leaves } from "../lib/layout";
-import { restorePane, restoreSession } from "../lib/session";
-import { type PaneState, type SavedTab, type Session, type Tab, emptyPane, isDirty, tabTitle } from "../lib/tabs";
+import { restorePane, restoreSession, saveTabState } from "../lib/session";
+import { type PaneState, type Session, emptyPane, isDirty, tabTitle } from "../lib/tabs";
 import { allTabs, mapPanes } from "../lib/workspace";
 import { type useFolder } from "./useFolder";
 import { type useWorkspace } from "./useWorkspace";
@@ -53,28 +53,11 @@ export function usePersist(
   // 状態をファイルに保存（変更から少し待ってまとめて書く）
   const saveTimer = useRef<number | undefined>(undefined);
   const persist = useCallback(() => {
-    const saveTabState = (t: Tab): SavedTab => {
-      const scroll = scrolls.current.get(t.id) ?? 0;
-      if (t.kind === "diff") {
-        const left = t.reads?.left?.force;
-        const right = t.reads?.right?.force;
-        return { kind: "diff", left: t.left, right: t.right, scroll, force: left || right ? { left, right } : undefined };
-      }
-      return {
-        path: t.path,
-        mode: t.mode,
-        scroll,
-        encoding: t.encoding,
-        bom: t.bom ?? false,
-        force: t.force,
-        ...(isDirty(t) ? { draft: t.content, draftBase: t.saved, savedBom: t.savedBom } : {}),
-      };
-    };
     const w = wsRef.current;
     const panes: Session["panes"] = {};
     for (const id of leaves(w.layout)) {
       const p = w.panes[id] ?? emptyPane();
-      panes[id] = { tabs: p.tabs.map(saveTabState), active: p.active };
+      panes[id] = { tabs: p.tabs.map((t) => saveTabState(t, scrolls.current.get(t.id) ?? 0)), active: p.active };
     }
     const s: Session = {
       version: 4,
