@@ -87,9 +87,9 @@ export function useShortcuts(
       } else if (k === "o") {
         e.preventDefault();
         run(e.shiftKey ? "open-folder" : "open-file", "key");
-      } else if (k === "w") {
+      } else if (k === "w" && !e.altKey) {
         e.preventDefault();
-        run("close-tab", "key");
+        if (!e.repeat) run(e.shiftKey ? "close-window" : "close-tab", "key");
       } else if (k === "e") {
         e.preventDefault();
         run("toggle-mode", "key");
